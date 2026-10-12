@@ -12,8 +12,14 @@
 - Changed codemode tool declarations to show input constraints such as integer, minimum/maximum, length, pattern, and default as `@` tags on property comments, so scripts see them without the tool repeating them in descriptions ([#10707](https://github.com/earendil-works/pi/issues/10707))
 - Changed `serializeConversation()` (compaction, branch summaries, bug reports) to omit thinking blocks; replayed thinking is often not in the live context, so including it could make a summarization request larger than the context it summarizes and fail
 
+### Added
+
+- Added a Grok UI prototype extension with rounded input framing, a conversation timeline, compact tool calls with hover previews, and a display-options overlay using Pi's fullscreen layout and extension APIs
+
 ### Fixed
 
+- Fixed oversized tool results blocking context-overflow recovery: complete results remain in history and private text/JSON files while requests use bounded excerpts, preserve tool-call pairing, and are checked after compaction
+- Fixed oversized summary requests by splitting and merging transcripts and reducing chunk size after an input-size rejection
 - Fixed Mistral streams being aborted mid-generation (e.g. during long thinking) after the request timeout; the timeout now applies only to waiting for response headers ([#10609](https://github.com/earendil-works/pi/issues/10609))
 - Fixed a symlinked `AGENTS.md` in a git worktree nested inside its main repo causing no project context file to load ([#10681](https://github.com/earendil-works/pi/issues/10681))
 - Fixed the code mode tool description claiming every failed tool call rejects; a tool that declares an output schema resolves with its value on failure too (e.g. `bash` with a nonzero exit)

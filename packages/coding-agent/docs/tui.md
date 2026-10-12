@@ -38,6 +38,7 @@ The package includes components for common layouts and controls:
 - `ScrollView` provides a bounded scrollable viewport.
 - `Loader` and `CancellableLoader` report ongoing work.
 - `MouseRegion` adds pointer behavior around another component.
+- `PreviewPanel` bounds a pointer preview and scrolls its content independently.
 
 Prefer these components over rebuilding selection, scrolling, text editing, or width handling. The extension examples show how to combine them with Pi’s borders and themes.
 
@@ -74,6 +75,16 @@ Treat each custom component instance as belonging to one interaction. Create a n
 Finish the interaction with the completion callback supplied to the component factory. It resolves the `ctx.ui.custom()` promise and disposes the component. Do not call `OverlayHandle.hide()` on an overlay created by `ctx.ui.custom()`.
 
 See [`overlay-qa-tests.ts`](../examples/extensions/overlay-qa-tests.ts) for positioning, stacking, focus, responsive visibility, and animation behavior.
+
+## Fullscreen timeline and pointer previews
+
+Use `isViewportTUI(tui)` before calling the optional fullscreen hooks. `setTimeline()` takes ordered preview/timestamp entries for the currently rendered turns, a tick-style callback, and a preview-component factory. `TRANSCRIPT_TURN_MARKER` is a zero-width rendering marker for the first line of each turn; Pi's user-message components emit it, and terminal renderers strip it. Keep marker order and metadata order aligned.
+
+The timeline reserves two transcript columns when at least two turns are available and the terminal is at least 60 columns wide. It highlights the turn containing the viewport top. Clicking a tick or chevron scrolls the existing viewport, including positioning a short final turn at the top; it does not change session state. Existing previous/next prompt bindings navigate turns while the timeline is enabled.
+
+Call `setMouseHoverEnabled(true)` for previews that need pointer motion, including inside multiplexers. `showHoverPreview(owner, component, event)` creates a non-capturing preview tied to a source region. It stays open while the pointer is over that source or the preview, and closes on keyboard input, scrolling, resize, focus loss or transcript replacement. A focused dialog takes precedence. `transcriptViewportHeight` lets preview components stay within the transcript and leave the input dock visible. Clear the timeline and hover settings on extension shutdown.
+
+A call renderer can return a `CompactToolCallComponent` with `compactToolCall: true` to opt into a one-line fullscreen tool summary. Hover renders the existing call/result details expanded in a `PreviewPanel`; the panel scrolls independently, and clicking expands inline. The normal expansion shortcut remains available. A component may set the flag to `false` to retain its display. Output-only renderers and native image output keep their existing display. Regular mode retains the original tool layout. See [`grok-ui.ts`](../examples/extensions/grok-ui.ts) for lifecycle, theme and component-reuse handling.
 
 ## Apply themes correctly
 

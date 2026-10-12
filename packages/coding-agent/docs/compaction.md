@@ -38,6 +38,10 @@ During a multi-turn agent run, Pi checks the canonical projected context after t
 
 A provider context-overflow error or an early final `stopReason: "length"` can select one compact-and-retry recovery attempt. Length responses with tool calls retain their synthetic failed tool results and follow the ordinary tool/queue scheduler rather than forcing the run to end.
 
+When a tool result is too large to retain in the active request, Pi appends a `context_edit` containing an excerpt and paths to the complete output. The raw result stays in session history. Private `.txt` and `.json` copies preserve the complete text, images and metadata under `tool-output/<session-hash>/` beside the session file. Ephemeral sessions use a private temporary directory. Use `read` with offset/limit to revisit text; a long single line can be sliced with `bash`.
+
+Pi checks the rebuilt request after compaction. If the retained call/result batch still exceeds the selected model's input budget, it summarizes that whole batch and retains the archive location as context. Calls and results stay paired, and completed tools are not executed again. A provider token or descriptive HTTP 413 rejection reduces the tool-output budget before retrying; archived outputs permit one additional bounded recovery attempt.
+
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
 ### How It Works
@@ -289,6 +293,8 @@ This prevents the model from treating it as a conversation to continue.
 Thinking blocks are omitted. Providers return summaries of the real reasoning, and replayed thinking is often not part of the model's live context, so including it could make the summarization request larger than the context it summarizes.
 
 Tool results are truncated to 2000 characters during serialization. Content beyond that limit is replaced with a marker indicating how many characters were truncated. This keeps summarization requests within reasonable token budgets, since tool results (especially from `read` and `bash`) are typically the largest contributors to context size.
+
+The summarization request also has an input budget derived from the summary model's context and reserved output. Oversized serialized input is split at UTF-8 boundaries, each fragment is summarized, and the checkpoints are merged into the requested format. Input-size rejections reduce the budget and re-split the input rather than retrying the same payload. Usage includes fragment and merge requests. A failed, aborted or incomplete fragment does not produce a compaction checkpoint.
 
 ## Custom Summarization via Extensions
 
