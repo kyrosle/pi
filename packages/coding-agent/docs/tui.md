@@ -88,6 +88,8 @@ Call `setMouseHoverEnabled(true)` for previews that need pointer motion, includi
 
 A call renderer can return a `CompactToolCallComponent` with `compactToolCall: true` to opt into a one-line fullscreen tool summary. Hover renders the existing call/result details expanded in a `PreviewPanel`; the panel scrolls independently, and clicking expands inline. The normal expansion shortcut remains available. A component may set the flag to `false` to retain its display. Output-only renderers and native image output keep their existing display. Regular mode retains the original tool layout. See [`grok-ui.ts`](../examples/extensions/grok-ui.ts) for lifecycle, theme and component-reuse handling.
 
+See the [Grok UI prototype](grok-ui-prototype.md) for this fork's extension setup and interaction checks.
+
 ## Apply themes correctly
 
 Use the theme passed to the extension or component callback. Theme helpers produce ANSI-styled strings for semantic colors such as accent, muted text, success, warnings, errors, tool output, and Markdown.

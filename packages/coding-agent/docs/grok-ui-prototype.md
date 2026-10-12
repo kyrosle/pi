@@ -59,7 +59,7 @@ Previews do not capture keyboard focus or cover the input dock. Leaving the sour
 ## Call chain and ownership
 
 ```text
-src/experimental/cli.ts -> src/main.ts
+src/cli.ts -> src/main.ts
   -> InteractiveMode
      -> createInteractiveTui() -> TuiAltScreen / TuiMainScreen
      -> createChatViewport() -> ScrollView + fixed input dock
