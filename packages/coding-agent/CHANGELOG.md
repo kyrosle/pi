@@ -71,6 +71,11 @@
 
 - Added a Grok UI prototype extension with rounded input framing, a conversation timeline, compact tool calls with hover previews, and a display-options overlay using Pi's fullscreen layout and extension APIs
 
+### Changed
+
+- Changed Grok hover previews to wait two seconds by default, with `/grok-hover-delay` persisting an extension-owned delay setting
+- Changed the Grok UI prototype to distinguish user messages and replies with role headings and a blue-gray user background, while reducing emphasis on thinking and tool output
+
 ## [1.2.0] - 2026-10-12
 
 ### New Features

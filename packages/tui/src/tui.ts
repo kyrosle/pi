@@ -514,6 +514,7 @@ export interface ViewportTUI extends TUI {
 	readonly transcriptViewportHeight?: number;
 	setTimeline?(options: TranscriptTimelineOptions | undefined): void;
 	setMouseHoverEnabled?(enabled: boolean): void;
+	setHoverPreviewDelay?(delayMs: number): void;
 	showHoverPreview?(owner: object, component: Component, source: TuiMouseEvent): void;
 	hideHoverPreview?(): void;
 }

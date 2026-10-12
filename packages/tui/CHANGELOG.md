@@ -12,6 +12,7 @@
 
 ### Added
 
+- Added an optional `setHoverPreviewDelay()` hook with cancellation while waiting, so extensions can configure pointer-preview timing without duplicating viewport mouse handling
 - Added `renderFakeCursor()`. Components wrap their drawn cursor with it, and the TUI renders it in reverse video, or omits it after `CURSOR_MARKER` when `showHardwareCursor` is enabled
 - Added an opt-in fullscreen conversation timeline with pointer previews and turn navigation, non-capturing hover previews, and the scrollable `PreviewPanel` component
 
