@@ -67,6 +67,103 @@ async function createTimeline() {
 }
 
 describe("fullscreen conversation timeline", () => {
+	it("waits for the configured delay without restarting when the pointer moves inside the same tick", async (context) => {
+		const h = await createTimeline();
+		context.mock.timers.enable({ apis: ["setTimeout"] });
+		try {
+			h.tui.setHoverPreviewDelay(2000);
+			const row = h.ticks()[0] + 1;
+			h.terminal.sendInput(`\x1b[<35;80;${row}M`);
+			assert.equal(h.tui.hasOverlay(), false);
+			context.mock.timers.tick(1999);
+			assert.equal(h.tui.hasOverlay(), false);
+			h.terminal.sendInput(`\x1b[<35;79;${row}M`);
+			context.mock.timers.tick(1);
+			assert.equal(h.tui.hasOverlay(), true);
+			assert.equal(h.tui.getFocusedComponent(), h.editor);
+		} finally {
+			h.tui.stop();
+		}
+	});
+
+	for (const cancellation of [
+		"leave",
+		"key",
+		"wheel",
+		"resize",
+		"dialog",
+		"transcript",
+		"focus",
+		"stop",
+		"disable",
+	] as const) {
+		it(`cancels a pending preview on ${cancellation}`, async (context) => {
+			const h = await createTimeline();
+			context.mock.timers.enable({ apis: ["setTimeout"] });
+			try {
+				h.tui.setHoverPreviewDelay(2000);
+				h.terminal.sendInput(`\x1b[<35;80;${h.ticks()[0] + 1}M`);
+				context.mock.timers.tick(1000);
+				switch (cancellation) {
+					case "leave":
+						h.terminal.sendInput("\x1b[<35;5;12M");
+						break;
+					case "key":
+						h.terminal.sendInput("Z");
+						break;
+					case "wheel":
+						h.terminal.sendInput("\x1b[<64;5;2M");
+						break;
+					case "resize":
+						h.terminal.resize(40, 12);
+						break;
+					case "dialog": {
+						const dialog = h.tui.showOverlay({ render: () => ["dialog"], invalidate() {}, handleInput() {} });
+						h.tui.renderNow();
+						dialog.hide();
+						break;
+					}
+					case "transcript":
+						h.tui.setLayoutRoot(new Text("other transcript", 0, 0));
+						break;
+					case "focus":
+						h.terminal.sendInput("\x1b[O");
+						break;
+					case "stop":
+						h.tui.stop();
+						break;
+					case "disable":
+						h.tui.setMouseHoverEnabled(false);
+						break;
+				}
+				context.mock.timers.tick(2000);
+				assert.equal(h.tui.hasOverlay(), false);
+			} finally {
+				h.tui.stop();
+			}
+		});
+	}
+
+	it("restarts the delay for another tick and rejects invalid timer values", async (context) => {
+		const h = await createTimeline();
+		context.mock.timers.enable({ apis: ["setTimeout"] });
+		try {
+			h.tui.setHoverPreviewDelay(2000);
+			h.terminal.sendInput(`\x1b[<35;80;${h.ticks()[0] + 1}M`);
+			context.mock.timers.tick(1500);
+			h.terminal.sendInput(`\x1b[<35;80;${h.ticks()[1] + 1}M`);
+			context.mock.timers.tick(1999);
+			assert.equal(h.tui.hasOverlay(), false);
+			context.mock.timers.tick(1);
+			assert.equal(h.tui.hasOverlay(), true);
+			for (const delay of [-1, Number.NaN, Number.POSITIVE_INFINITY, 0.5, 0x80000000]) {
+				assert.throws(() => h.tui.setHoverPreviewDelay(delay), RangeError);
+			}
+		} finally {
+			h.tui.stop();
+		}
+	});
+
 	it("shows one tick per turn, highlights the current turn, and jumps to the clicked turn", async () => {
 		const h = await createTimeline();
 		try {

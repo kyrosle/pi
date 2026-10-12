@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import {
@@ -20,17 +21,21 @@ import grokUi, { GrokEditor, GrokMenu } from "../../examples/extensions/grok-ui.
 import type { ToolRenderContext, ToolRenderers } from "../../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
 import { createChatViewport } from "../../src/modes/interactive/chat-viewport.ts";
+import { AssistantMessageComponent } from "../../src/modes/interactive/components/assistant-message.ts";
 import { WorkingStatusIndicator } from "../../src/modes/interactive/components/status-indicator.ts";
 import { ToolExecutionComponent } from "../../src/modes/interactive/components/tool-execution.ts";
 import { UserMessageComponent } from "../../src/modes/interactive/components/user-message.ts";
 import { initTheme, loadThemeFromPath, theme } from "../../src/modes/interactive/theme/theme.ts";
 import { createInteractiveTuiReference } from "../../src/modes/interactive/tui-renderer.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
-import { createHarness, createTestUiContext, getToolResult, type Harness } from "./harness.ts";
+import { createHarness, createTestUiContext, getToolResult, getUserTexts, type Harness } from "./harness.ts";
 
 const harnesses: Harness[] = [];
+let agentDirectory: string;
 
 beforeEach(() => {
+	agentDirectory = mkdtempSync(join(tmpdir(), "pi-grok-settings-"));
+	vi.stubEnv("PI_CODING_AGENT_DIR", agentDirectory);
 	initTheme("dark");
 	setKeybindings(new KeybindingsManager());
 });
@@ -39,6 +44,8 @@ afterEach(() => {
 	for (const harness of harnesses.splice(0)) harness.cleanup();
 	setKeybindings(new KeybindingsManager());
 	vi.restoreAllMocks();
+	vi.unstubAllEnvs();
+	rmSync(agentDirectory, { recursive: true, force: true });
 });
 
 function createEditor(columns = 80) {
@@ -121,6 +128,99 @@ describe("Grok editor", () => {
 });
 
 describe("Grok extension compatibility", () => {
+	it("defaults hover to two seconds and applies persistent settings without changing model context", async () => {
+		const harness = await createHarness({ extensionFactories: [grokUi] });
+		harnesses.push(harness);
+		const tui = new TuiAltScreen(new VirtualTerminal());
+		const setDelay = vi.spyOn(tui, "setHoverPreviewDelay");
+		const notify = vi.fn();
+		await harness.session.bindExtensions({
+			mode: "tui",
+			uiContext: createTestUiContext({
+				setHeader: (factory) => {
+					factory?.(tui, theme);
+				},
+				notify,
+			}),
+		});
+		expect(setDelay).toHaveBeenLastCalledWith(2000);
+		await harness.session.prompt("/grok-hover-delay 3500");
+		expect(setDelay).toHaveBeenLastCalledWith(3500);
+		expect(JSON.parse(readFileSync(join(agentDirectory, "grok-ui.json"), "utf8"))).toEqual({ hoverDelayMs: 3500 });
+		for (const value of ["-1", "NaN", "Infinity", "0.1", "2147483648"]) {
+			await harness.session.prompt(`/grok-hover-delay ${value}`);
+			expect(setDelay).toHaveBeenLastCalledWith(3500);
+			expect(notify).toHaveBeenLastCalledWith(expect.any(String), "error");
+		}
+		await harness.session.extensionRunner.emit({ type: "session_shutdown", reason: "reload" });
+		expect(setDelay).toHaveBeenLastCalledWith(0);
+		await harness.session.extensionRunner.emit({ type: "session_start", reason: "resume" });
+		expect(setDelay).toHaveBeenLastCalledWith(3500);
+		expect(harness.faux.state.callCount).toBe(0);
+		expect(getUserTexts(harness)).toEqual([]);
+	});
+
+	it("validates stored hover settings and preserves other extension settings when updating the delay", async () => {
+		writeFileSync(join(agentDirectory, "grok-ui.json"), JSON.stringify({ hoverDelayMs: -1, otherSetting: "keep" }));
+		const harness = await createHarness({ extensionFactories: [grokUi] });
+		harnesses.push(harness);
+		const tui = new TuiAltScreen(new VirtualTerminal());
+		const setDelay = vi.spyOn(tui, "setHoverPreviewDelay");
+		const notify = vi.fn();
+		await harness.session.bindExtensions({
+			mode: "tui",
+			uiContext: createTestUiContext({
+				setHeader: (factory) => {
+					factory?.(tui, theme);
+				},
+				notify,
+			}),
+		});
+		expect(setDelay).toHaveBeenLastCalledWith(2000);
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("hoverDelayMs"), "warning");
+		await harness.session.prompt("/grok-hover-delay 0");
+		expect(setDelay).toHaveBeenLastCalledWith(0);
+		expect(JSON.parse(readFileSync(join(agentDirectory, "grok-ui.json"), "utf8"))).toEqual({
+			hoverDelayMs: 0,
+			otherSetting: "keep",
+		});
+	});
+
+	it("labels rendered roles without labeling thinking or duplicating a streamed reply header", async () => {
+		const harness = await createHarness({ extensionFactories: [grokUi] });
+		harnesses.push(harness);
+		const transformers = harness.session.extensionRunner.getMarkdownTransformers();
+		const userText = "检查文件 🌍";
+		const user = new UserMessageComponent(userText, undefined, 1, transformers);
+		const message = fauxAssistantMessage([
+			{ type: "thinking", thinking: "Checking the file." },
+			{ type: "text", text: "检查完成 🌍" },
+		]);
+		const assistant = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, transformers);
+		for (const width of [12, 40, 80]) {
+			const userLines = user.render(width);
+			const assistantLines = assistant.render(width);
+			expect(userLines.every((line) => visibleWidth(line) <= width)).toBe(true);
+			expect(assistantLines.every((line) => visibleWidth(line) <= width)).toBe(true);
+			expect(userLines.map((line) => stripAnsi(line).trim()).filter((line) => line === "你")).toHaveLength(1);
+			expect(assistantLines.map((line) => stripAnsi(line).trim()).filter((line) => line === "Pi")).toHaveLength(1);
+		}
+		assistant.updateContent(fauxAssistantMessage("检查完成 🌍，继续处理。"), true);
+		for (const width of [40, 80]) {
+			expect(
+				assistant
+					.render(width)
+					.map((line) => stripAnsi(line).trim())
+					.filter((line) => line === "Pi"),
+			).toHaveLength(1);
+		}
+		expect(message.content).toEqual([
+			{ type: "thinking", thinking: "Checking the file." },
+			{ type: "text", text: "检查完成 🌍" },
+		]);
+		expect(transformers[0]?.("", { messageType: "assistant", isStreaming: true, availableWidth: 80 })).toBe("");
+	});
+
 	it("preserves model, tool definitions and prompt through startup and actual write/edit turns", async () => {
 		const harness = await createHarness({ extensionFactories: [grokUi] });
 		harnesses.push(harness);
@@ -144,6 +244,8 @@ describe("Grok extension compatibility", () => {
 			fauxAssistantMessage("Done"),
 		]);
 		await harness.session.prompt("Write and edit notes.");
+		expect(getUserTexts(harness)).toEqual(["Write and edit notes."]);
+		expect(harness.session.getLastAssistantText()).toBe("Done");
 		expect(readFileSync(file, "utf8")).toBe("after\n");
 		expect(getToolResult(harness, "edit").isError).toBe(false);
 		expect(getToolResult(harness, "edit").details).toMatchObject({ diff: expect.stringContaining("after") });
@@ -419,6 +521,7 @@ describe("Grok timeline and compact tool previews", () => {
 		const renderer = harness.session.extensionRunner.resolveToolRenderers(toolName, () =>
 			harness.session.getToolDefinition(toolName),
 		);
+		tui.setHoverPreviewDelay(0);
 		const component = new ToolExecutionComponent(toolName, "preview-test", args, {}, renderer, tui, harness.tempDir);
 		component.markExecutionStarted();
 		component.updateResult(result);
@@ -511,6 +614,33 @@ describe("Grok timeline and compact tool previews", () => {
 			expect(h.tui.getFocusedComponent()).toBe(h.editor);
 		} finally {
 			h.tui.stop();
+		}
+	});
+
+	it("expands a tool immediately when clicked during its preview delay", async () => {
+		const h = await scene(
+			"read",
+			{ path: "notes.txt" },
+			{
+				content: [{ type: "text", text: "visible result" }],
+				isError: false,
+			},
+		);
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			h.tui.setHoverPreviewDelay(2000);
+			const row = h.terminal.getViewport().findIndex((line) => line.includes("notes.txt")) + 1;
+			h.terminal.sendInput(`\x1b[<35;5;${row}M`);
+			expect(h.tui.hasOverlay()).toBe(false);
+			h.terminal.sendInput(`\x1b[<0;5;${row}M`);
+			h.terminal.sendInput(`\x1b[<0;5;${row}m`);
+			expect(stripAnsi(h.component.render(100).join("\n"))).toContain("visible result");
+			await vi.advanceTimersByTimeAsync(2100);
+			expect(h.tui.hasOverlay()).toBe(false);
+			expect(h.tui.getFocusedComponent()).toBe(h.editor);
+		} finally {
+			h.tui.stop();
+			vi.useRealTimers();
 		}
 	});
 
