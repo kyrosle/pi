@@ -441,6 +441,7 @@ export {
 	BorderedLoader,
 	BranchSummaryMessageComponent,
 	CompactionSummaryMessageComponent,
+	type CompactToolCallComponent,
 	CustomEditor,
 	type CustomEditorOptions,
 	CustomMessageComponent,

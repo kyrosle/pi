@@ -70,6 +70,7 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | `summarize.ts` | Summarize conversation with GPT-5.2 and show in transient UI |
 | `custom-footer.ts` | Custom footer with git branch and token stats via `ctx.ui.setFooter()` |
 | `custom-header.ts` | Custom header via `ctx.ui.setHeader()` |
+| `grok-ui.ts` | Grok input framing, tool statuses and a display popup through official extension APIs; see [prototype notes](../../docs/grok-ui-prototype.md) |
 | `overlay-test.ts` | Test overlay compositing with inline text inputs and edge cases |
 | `overlay-qa-tests.ts` | Comprehensive overlay QA tests: anchors, margins, stacking, overflow, animation |
 | `doom-overlay/` | DOOM game running as an overlay at 35 FPS (demonstrates real-time game rendering) |

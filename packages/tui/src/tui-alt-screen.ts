@@ -39,6 +39,9 @@ import {
 	dispatchMouseEvent,
 	type OverlayHandle,
 	retargetMouseEvent,
+	TRANSCRIPT_TURN_MARKER,
+	type TranscriptTimelineEntry,
+	type TranscriptTimelineOptions,
 	TuiBase,
 	type TuiMouseButton,
 	type TuiMouseDispatchResult,
@@ -252,6 +255,23 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private readonly onRightClickPaste?: () => void;
 	private copyOnSelect: boolean;
 	private readonly copySelection?: (text: string) => Promise<boolean | string>;
+	private timelineOptions?: TranscriptTimelineOptions;
+	private timeline?: {
+		x: number;
+		y: number;
+		start: number;
+		count: number;
+		active: number;
+		up?: number;
+		down?: number;
+		rows: number[];
+		entries: readonly TranscriptTimelineEntry[];
+	};
+	private timelineHovered: number | undefined;
+	private hoverOwner?: object;
+	private hoverOverlay?: OverlayHandle;
+	private hoverSource?: { x: number; y: number; width: number; height: number; scrollTop: number };
+	private mouseHoverEnabled = false;
 
 	constructor(
 		terminal: Terminal,
@@ -286,6 +306,12 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		return this.getPrimaryScrollView().scrollTop;
 	}
 
+	get transcriptViewportHeight(): number {
+		return this.currentLayout
+			? (getScrollViewBox(this.currentLayout, this.getPrimaryScrollView())?.clip.height ?? 0)
+			: 0;
+	}
+
 	get isFollowingOutput(): boolean {
 		return this.getPrimaryScrollView().isFollowingEnd;
 	}
@@ -316,6 +342,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	/** Drop the text selection and multi-click history, e.g. before the host replaces the transcript. */
 	resetTextSelection(): void {
+		this.hideHoverPreview();
 		this.clearTextSelection();
 		this.lastClick = undefined;
 	}
@@ -328,8 +355,80 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	setLayoutRoot(component: Component | undefined): void {
 		if (this.layoutRoot === component) return;
 		this.layoutRoot = component;
+		this.hideHoverPreview();
 		this.currentLayout = undefined;
 		this.requestRender();
+	}
+
+	setTimeline(options: TranscriptTimelineOptions | undefined): void {
+		this.timelineOptions = options;
+		this.timeline = undefined;
+		this.timelineHovered = undefined;
+		this.hideHoverPreview();
+		this.requestRender();
+	}
+
+	setMouseHoverEnabled(enabled: boolean): void {
+		this.mouseHoverEnabled = enabled;
+		if (this.altScreenActive && this.mouseEnabled) {
+			this.terminal.write(`\x1b[?1003l${this.mouseTrackingSequence()}`);
+		}
+		if (!enabled) this.hideHoverPreview();
+	}
+
+	private mouseTrackingSequence(): string {
+		const term = process.env.TERM?.toLowerCase() ?? "";
+		const multiplexer =
+			process.env.TMUX !== undefined ||
+			process.env.ZELLIJ !== undefined ||
+			process.env.STY !== undefined ||
+			term.startsWith("tmux") ||
+			term.startsWith("screen");
+		return !this.mouseHoverEnabled && multiplexer ? ENABLE_BUTTON_MOTION_MOUSE : ENABLE_ALL_MOTION_MOUSE;
+	}
+
+	showHoverPreview(owner: object, component: Component, source: TuiMouseEvent): void {
+		if (this.hoverOwner === owner || this.isOverlayFocused() || this.selectionPressActive || this.mouseCapture)
+			return;
+		this.hideHoverPreview();
+		if (this.terminal.columns < 12 || this.terminal.rows < 6) return;
+		const viewport = this.currentLayout
+			? getScrollViewBox(this.currentLayout, this.getPrimaryScrollView())?.clip
+			: undefined;
+		const maxHeight = Math.min(Math.floor(this.terminal.rows * 0.7), viewport?.height ?? this.terminal.rows);
+		if (maxHeight < 4) return;
+		const width = Math.min(72, this.terminal.columns - 4);
+		const previewHeight = Math.min(maxHeight, component.render(width).length);
+		this.hoverOwner = owner;
+		this.hoverSource = {
+			x: source.screenX - source.x,
+			y: source.screenY - source.y,
+			width: source.width,
+			height: source.height,
+			scrollTop: this.getPrimaryScrollView().scrollTop,
+		};
+		this.hoverOverlay = this.showOverlay(component, {
+			width,
+			row: Math.max(
+				viewport?.y ?? 1,
+				Math.min(
+					source.screenY + 1,
+					(viewport ? viewport.y + viewport.height : this.terminal.rows - 1) - previewHeight,
+				),
+			),
+			col: Math.min(source.screenX, this.terminal.columns - width - 3),
+			margin: 1,
+			maxHeight,
+			nonCapturing: true,
+		});
+	}
+
+	hideHoverPreview(): void {
+		const overlay = this.hoverOverlay;
+		this.hoverOverlay = undefined;
+		this.hoverOwner = undefined;
+		this.hoverSource = undefined;
+		overlay?.hide();
 	}
 
 	override render(width: number): string[] {
@@ -370,23 +469,16 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.clearComponentMouseGesture();
 		this.lastComponentClick = undefined;
 		this.resetRenderState();
-		const term = process.env.TERM?.toLowerCase() ?? "";
 		// Multiplexers can lag when every pointer movement is forwarded. Button-motion
 		// tracking preserves clicks, wheel events, selections, and scrollbar dragging.
-		const mouseSequence =
-			process.env.TMUX !== undefined ||
-			process.env.ZELLIJ !== undefined ||
-			process.env.STY !== undefined ||
-			term.startsWith("tmux") ||
-			term.startsWith("screen")
-				? ENABLE_BUTTON_MOTION_MOUSE
-				: ENABLE_ALL_MOTION_MOUSE;
+		const mouseSequence = this.mouseTrackingSequence();
 		this.terminal.write(
 			`${ENTER_ALT_SCREEN}${DISABLE_AUTOWRAP}${this.mouseEnabled ? mouseSequence : ""}\x1b[2J\x1b[H\x1b[?25l`,
 		);
 	}
 
 	protected override beforeTerminalStop(_options: TuiStopOptions): void {
+		this.hideHoverPreview();
 		this.closeSearch();
 		this.stopSelectionAutoScroll();
 		this.selectionPressActive = false;
@@ -409,7 +501,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		} else {
 			const width = Math.max(1, this.terminal.columns);
 			const documentLines = this.resolveFakeCursors(this.render(width)).map((line) =>
-				line.replace(OSC133_ZONE_PREFIX, ""),
+				line.replace(OSC133_ZONE_PREFIX, "").replaceAll(TRANSCRIPT_TURN_MARKER, ""),
 			);
 			this.lastDocument = this.applyLineResets(documentLines.map((line) => line.replaceAll(CURSOR_MARKER, ""))).map(
 				(line) => (isImageLine(line) || visibleWidth(line) <= width ? line : sliceByColumn(line, 0, width, true)),
@@ -501,16 +593,19 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	scrollBy(lines: number): void {
+		this.hideHoverPreview();
 		this.getPrimaryScrollView().scrollBy(lines);
 		this.requestRender();
 	}
 
 	scrollToTop(): void {
+		this.hideHoverPreview();
 		this.getPrimaryScrollView().scrollToStart();
 		this.requestRender();
 	}
 
 	scrollToBottom(): void {
+		this.hideHoverPreview();
 		this.getPrimaryScrollView().scrollToEnd();
 		this.requestRender();
 	}
@@ -522,8 +617,12 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		if (!lines) return;
 
 		for (let row = scrollView.scrollTop + direction; row >= 0 && row < lines.length; row += direction) {
-			if (!OSC133_PROMPT_START.test(lines[row] ?? "")) continue;
-			scrollView.scrollTo(row);
+			const line = lines[row] ?? "";
+			if (this.timelineOptions ? !line.includes(TRANSCRIPT_TURN_MARKER) : !OSC133_PROMPT_START.test(line)) continue;
+			scrollView.scrollTo(row, {
+				disableFollow: Boolean(this.timelineOptions),
+				allowOverscroll: Boolean(this.timelineOptions),
+			});
 			this.requestRender();
 			return;
 		}
@@ -693,6 +792,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	private handleViewportInput(data: string): { consume?: boolean } | undefined {
 		if (data === FOCUS_OUT) {
+			this.hideHoverPreview();
 			const hadActiveSelection = this.selectionPressActive;
 			const hadNonEmptyActiveSelection = hadActiveSelection && this.getSelectionBounds() !== undefined;
 			this.selectionPressActive = false;
@@ -738,6 +838,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			return { consume: true };
 		}
 		if (this.isMouseSequence(data)) return { consume: true };
+		this.hideHoverPreview();
 
 		const keybindings = getKeybindings();
 		const isRelease = isKeyRelease(data);
@@ -922,6 +1023,21 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 					: "drag"
 				: "press";
 		const event = this.createMouseEvent(type, raw.button, raw.x, raw.y);
+		const previewBounds = this.hoverOverlay?.getBounds();
+		const source = this.hoverSource;
+		const insideSource =
+			source &&
+			raw.x >= source.x &&
+			raw.x < source.x + source.width &&
+			raw.y >= source.y &&
+			raw.y < source.y + source.height;
+		const insidePreview =
+			previewBounds &&
+			raw.x >= previewBounds.col &&
+			raw.x < previewBounds.col + previewBounds.width &&
+			raw.y >= previewBounds.row &&
+			raw.y < previewBounds.row + previewBounds.height;
+		if (this.hoverOverlay && !insideSource && !insidePreview) this.hideHoverPreview();
 
 		if (this.mouseCapture || this.mousePressTarget) {
 			const target = this.mouseCapture ?? this.mousePressTarget!;
@@ -947,6 +1063,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 
 		if (this.handleSearchMouseEvent(raw)) return;
+		if (!insidePreview && this.handleTimelineMouse(event)) return;
 
 		const overlay = this.dispatchMouseToOverlay(event);
 		if (!overlay.hit) {
@@ -1005,6 +1122,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	private routeWheel(event: WheelEvent, delta: number): void {
+		this.hideHoverPreview();
 		let remaining = delta;
 		const seen = new Set<ScrollView>();
 		for (const scrollView of this.currentLayout ? getScrollViewsAt(this.currentLayout, event.x, event.y) : []) {
@@ -1676,6 +1794,97 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		return result;
 	}
 
+	private compositeTimeline(screen: string[], layout: LayoutFrame, width: number): string[] {
+		this.timeline = undefined;
+		const options = this.timelineOptions;
+		if (!options || width < 60 || this.isOverlayFocused()) return screen;
+		const scrollView = layout.primaryScrollView ?? this.implicitScrollView;
+		const box = getScrollViewBox(layout, scrollView);
+		if (!box?.scrollContentLines || box.clip.height < 4) return screen;
+		const rows: number[] = [];
+		for (let row = 0; row < box.scrollContentLines.length; row++) {
+			if (box.scrollContentLines[row]?.includes(TRANSCRIPT_TURN_MARKER)) rows.push(row);
+		}
+		const entries = options.getEntries();
+		const total = Math.min(rows.length, entries.length);
+		if (total < 2) return screen;
+		let active = 0;
+		let up: number | undefined;
+		let down: number | undefined;
+		for (let index = 0; index < total; index++) {
+			if (rows[index] <= scrollView.scrollTop) active = index;
+			if (rows[index] < scrollView.scrollTop) up = index;
+			if (rows[index] > scrollView.scrollTop && down === undefined) down = index;
+		}
+		const count = Math.min(total, box.clip.height - 2);
+		const start = Math.max(0, Math.min(total - count, active - Math.floor(count / 2)));
+		const y = box.clip.y + Math.floor((box.clip.height - count - 2) / 2);
+		const x = box.clip.x + box.clip.width - 2;
+		this.timeline = { x, y, start, count, active, up, down, rows, entries };
+		const result = [...screen];
+		const paint = (row: number, text: string, selected: boolean, hovered: boolean, enabled = true) => {
+			result[row] = compositeTuiLine(
+				result[row] ?? "",
+				options.styleTick(text, selected, hovered, enabled),
+				x,
+				2,
+				width,
+			);
+		};
+		paint(y, " ▲", false, this.timelineHovered === -1, up !== undefined);
+		for (let offset = 0; offset < count; offset++) {
+			const index = start + offset;
+			paint(
+				y + 1 + offset,
+				index === active ? "━━" : this.timelineHovered === index ? "──" : " ─",
+				index === active,
+				this.timelineHovered === index,
+			);
+		}
+		paint(y + count + 1, " ▼", false, this.timelineHovered === -2, down !== undefined);
+		return result;
+	}
+
+	private handleTimelineMouse(event: TuiMouseEvent): boolean {
+		const timeline = this.timeline;
+		const hit =
+			timeline && event.screenX >= timeline.x && event.screenX < timeline.x + 2
+				? event.screenY === timeline.y
+					? -1
+					: event.screenY === timeline.y + timeline.count + 1
+						? -2
+						: event.screenY > timeline.y && event.screenY <= timeline.y + timeline.count
+							? timeline.start + event.screenY - timeline.y - 1
+							: undefined
+				: undefined;
+		if (hit !== this.timelineHovered) {
+			this.timelineHovered = hit;
+			this.requestRender();
+		}
+		if (hit === undefined || !timeline) return false;
+		if (event.type === "move" && hit >= 0 && this.timelineOptions) {
+			const entry = timeline.entries[hit];
+			if (entry)
+				this.showHoverPreview(entry, this.timelineOptions.renderPreview(entry), {
+					...event,
+					x: event.screenX - timeline.x,
+					y: 0,
+					width: 2,
+					height: 1,
+				});
+		}
+		if (event.type === "press" && event.button === "left") {
+			const target = hit === -1 ? timeline.up : hit === -2 ? timeline.down : hit;
+			if (target !== undefined) {
+				this.hideHoverPreview();
+				this.clearTextSelection();
+				this.getPrimaryScrollView().scrollTo(timeline.rows[target], { disableFollow: true, allowOverscroll: true });
+				this.requestRender();
+			}
+		}
+		return true;
+	}
+
 	private compositeFlashes(screen: string[], width: number, height: number): string[] {
 		const flashLines = this.flashes.render(width).slice(-height);
 		if (flashLines.length === 0) return screen;
@@ -1696,13 +1905,30 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const height = Math.max(1, this.terminal.rows);
 		const root = this.layoutRoot ?? this.implicitScrollView;
 		let nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
+		const primary = nextLayout.primaryScrollView ?? this.implicitScrollView;
+		const gutter = this.timelineOptions && width >= 60 && this.timelineOptions.getEntries().length >= 2 ? 2 : 0;
+		if (primary.rightGutterWidth !== gutter) {
+			primary.setRightGutterWidth(gutter);
+			nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
+		}
+		if (
+			this.hoverOverlay &&
+			(this.isOverlayFocused() ||
+				this.previousScreenWidth !== width ||
+				this.previousScreenHeight !== height ||
+				this.hoverSource?.scrollTop !== primary.scrollTop)
+		)
+			this.hideHoverPreview();
 		if (this.refreshSearch(nextLayout)) {
 			nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
 		}
 		// Resolve fake cursors before highlighting and compositing, which only track SGR codes
-		let screen = this.resolveFakeCursors(nextLayout.lines.map((line) => line.replace(OSC133_ZONE_PREFIX, "")));
+		let screen = this.resolveFakeCursors(
+			nextLayout.lines.map((line) => line.replace(OSC133_ZONE_PREFIX, "").replaceAll(TRANSCRIPT_TURN_MARKER, "")),
+		);
 		screen = this.applySearchHighlights(screen, nextLayout);
 		screen = this.compositeScrollToEndIndicator(screen, nextLayout, width);
+		screen = this.compositeTimeline(screen, nextLayout, width);
 		screen = this.compositeOverlays(screen, width, height);
 		if (screen.length > height) screen = screen.slice(screen.length - height);
 		screen = this.applySelection(screen, nextLayout);

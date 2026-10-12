@@ -354,7 +354,15 @@ export async function generateBranchSummary(
 	if (model.reasoning && thinkingLevel && thinkingLevel !== "off") {
 		requestOptions.reasoning = thinkingLevel;
 	}
-	const response = await completeSummarization(model, context, requestOptions, streamFn, retry, callbacks);
+	const response = await completeSummarization(
+		model,
+		context,
+		requestOptions,
+		streamFn,
+		retry,
+		callbacks,
+		instructions,
+	);
 
 	// Check if aborted or errored
 	if (response.stopReason === "aborted") {

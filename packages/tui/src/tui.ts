@@ -201,6 +201,20 @@ export function isFocusable(component: Component | null): component is Component
  */
 export const CURSOR_MARKER = "\x1b_pi:c\x07";
 
+/** Zero-width marker for a conversation turn; renderers strip it before terminal output. */
+export const TRANSCRIPT_TURN_MARKER = "\x1b_pi:turn\x07";
+
+export interface TranscriptTimelineEntry {
+	preview: string;
+	timestamp?: number;
+}
+
+export interface TranscriptTimelineOptions {
+	getEntries: () => readonly TranscriptTimelineEntry[];
+	styleTick: (text: string, active: boolean, hovered: boolean, enabled: boolean) => string;
+	renderPreview: (entry: TranscriptTimelineEntry) => Component;
+}
+
 /** Fake cursor markers - zero-width APC sequences around the text drawn as the cursor. See resolveFakeCursors(). */
 export const FAKE_CURSOR_START = "\x1b_pi:fc\x07";
 export const FAKE_CURSOR_END = "\x1b_pi:/fc\x07";
@@ -503,6 +517,11 @@ export const VIEWPORT_TUI = Symbol.for("@earendil-works/pi-tui/viewport");
 export interface ViewportTUI extends TUI {
 	readonly [VIEWPORT_TUI]: true;
 	setLayoutRoot(component: Component | undefined): void;
+	readonly transcriptViewportHeight?: number;
+	setTimeline?(options: TranscriptTimelineOptions | undefined): void;
+	setMouseHoverEnabled?(enabled: boolean): void;
+	showHoverPreview?(owner: object, component: Component, source: TuiMouseEvent): void;
+	hideHoverPreview?(): void;
 }
 
 export function isViewportTUI(tui: TUI): tui is ViewportTUI {
@@ -1509,8 +1528,9 @@ export abstract class TuiBase extends Container implements TUI {
 	 */
 	protected resolveFakeCursors(lines: string[]): string[] {
 		return lines.map((line) => {
-			if (!line.includes(FAKE_CURSOR_START)) return line;
-			const resolved = this.showHardwareCursor ? line.replace(FOCUSED_FAKE_CURSOR, "$1$2") : line;
+			const text = line.replaceAll(TRANSCRIPT_TURN_MARKER, "");
+			if (!text.includes(FAKE_CURSOR_START)) return text;
+			const resolved = this.showHardwareCursor ? text.replace(FOCUSED_FAKE_CURSOR, "$1$2") : text;
 			return resolved.replaceAll(FAKE_CURSOR_START, "\x1b[7m").replaceAll(FAKE_CURSOR_END, "\x1b[27m");
 		});
 	}
