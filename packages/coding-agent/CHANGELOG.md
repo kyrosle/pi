@@ -41,6 +41,8 @@
 
 ### Fixed
 
+- Fixed oversized tool results blocking context-overflow recovery: complete results remain in history and private text/JSON files while requests use bounded excerpts, preserve tool-call pairing, and are checked after compaction
+- Fixed oversized summary requests by splitting and merging transcripts and reducing chunk size after an input-size rejection
 - Pinned internal Pi dependencies to exact release versions to prevent fresh installs from mixing incompatible packages ([#10865](https://github.com/earendil-works/pi/issues/10865))
 - Fixed resumed sessions dropping tools activated during the session. Resume now restores the session's active tools, with `--tools +name`/`-name` entries applied to them, unless `--tools` with tool names, `--no-tools`, or `--no-builtin-tools` selects tools explicitly ([#10785](https://github.com/earendil-works/pi/issues/10785))
 - Fixed stopping a codemode script or reaching its deadline waiting for a non-interruptible built-in to return on Bun ([#10748](https://github.com/earendil-works/pi/issues/10748))
@@ -64,6 +66,10 @@
 - Fixed tool calls whose final arguments are malformed JSON silently running with only the fields parsed before the error; they now fail validation and show the model the raw arguments it sent ([#10897](https://github.com/earendil-works/pi/issues/10897))
 - Fixed Claude Haiku 5.5 and Claude Opus 5 not supporting the `off` thinking level ([#10753](https://github.com/earendil-works/pi/issues/10753))
 - Fixed `done()` of an extension's `ctx.ui.custom({ overlay: true })` closing the topmost overlay instead of its own, which left the finished overlay on screen and another extension's dialog unresolved ([#10648](https://github.com/earendil-works/pi/issues/10648), [#10999](https://github.com/earendil-works/pi/pull/10999) by [@masonc15](https://github.com/masonc15))
+
+### Added
+
+- Added a Grok UI prototype extension with rounded input framing, a conversation timeline, compact tool calls with hover previews, and a display-options overlay using Pi's fullscreen layout and extension APIs
 
 ## [1.2.0] - 2026-10-12
 

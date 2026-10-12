@@ -1,0 +1,232 @@
+import assert from "node:assert/strict";
+import { afterEach, describe, it } from "node:test";
+import { PreviewPanel } from "../src/components/preview-panel.ts";
+import { ScrollView } from "../src/components/scroll-view.ts";
+import { Text } from "../src/components/text.ts";
+import { VStack } from "../src/components/v-stack.ts";
+import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "../src/keybindings.ts";
+import { TRANSCRIPT_TURN_MARKER, type TranscriptTimelineEntry } from "../src/tui.ts";
+import { TuiAltScreen } from "../src/tui-alt-screen.ts";
+import { visibleWidth } from "../src/utils.ts";
+import { VirtualTerminal } from "./virtual-terminal.ts";
+
+afterEach(() => setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS)));
+
+async function createTimeline() {
+	const terminal = new VirtualTerminal(80, 12);
+	const tui = new TuiAltScreen(terminal);
+	const entries: TranscriptTimelineEntry[] = Array.from({ length: 4 }, (_, index) => ({
+		preview: `question ${index}`,
+		timestamp: 1700000000000 + index * 1000,
+	}));
+	const document = new Text(
+		entries
+			.flatMap((entry, index) => [
+				TRANSCRIPT_TURN_MARKER + entry.preview,
+				...Array.from({ length: 5 }, (_, line) => `answer ${index}, line ${line}`),
+			])
+			.join("\n"),
+		0,
+		0,
+	);
+	const scroll = new ScrollView(document, { follow: "end", primary: true, scrollbar: "auto" });
+	const inputs: string[] = [];
+	const editor = {
+		render: () => ["editor", "footer"],
+		invalidate() {},
+		handleInput: (data: string) => inputs.push(data),
+	};
+	const root = new VStack([
+		{ component: scroll, basis: 0, grow: 1 },
+		{ component: editor, basis: "auto" },
+	]);
+	let previews = 0;
+	const options = {
+		getEntries: () => entries,
+		styleTick: (text: string) => text,
+		renderPreview: (entry: TranscriptTimelineEntry) => {
+			previews++;
+			return new PreviewPanel(new Text(`${entry.timestamp}\n${entry.preview}\n${"detail\n".repeat(12)}`, 0, 0), {
+				maxHeight: () => 6,
+				border: (text) => text,
+				background: (text) => text,
+			});
+		},
+	};
+	const mount = () => {
+		tui.setLayoutRoot(root);
+		tui.setTimeline(options);
+	};
+	mount();
+	tui.setMouseHoverEnabled(true);
+	tui.setFocus(editor);
+	tui.start();
+	await terminal.waitForRender();
+	const ticks = () => terminal.getViewport().flatMap((line, row) => (/(?:━━| ─|──)$/.test(line) ? [row] : []));
+	return { tui, terminal, scroll, entries, editor, inputs, previews: () => previews, mount, ticks };
+}
+
+describe("fullscreen conversation timeline", () => {
+	it("shows one tick per turn, highlights the current turn, and jumps to the clicked turn", async () => {
+		const h = await createTimeline();
+		try {
+			assert.equal(h.ticks().length, 4);
+			assert.ok(h.terminal.getViewport()[h.ticks()[2]].endsWith("━━"));
+			const first = h.ticks()[0] + 1;
+			h.terminal.sendInput(`\x1b[<0;80;${first}M`);
+			h.terminal.sendInput(`\x1b[<0;80;${first}m`);
+			await h.terminal.waitForRender();
+			assert.equal(h.scroll.scrollTop, 0);
+			assert.ok(h.terminal.getViewport()[0].startsWith("question 0"));
+			assert.ok(h.terminal.getViewport()[h.ticks()[0]].endsWith("━━"));
+			assert.equal(h.tui.getFocusedComponent(), h.editor);
+			assert.equal(h.scroll.isFollowingEnd, false);
+		} finally {
+			h.tui.stop();
+		}
+	});
+
+	it("uses chevrons and configurable keyboard navigation for turns", async () => {
+		const h = await createTimeline();
+		try {
+			h.tui.scrollToTop();
+			await h.terminal.waitForRender();
+			const down = h.terminal.getViewport().findIndex((line) => line.endsWith("▼"));
+			h.terminal.sendInput(`\x1b[<0;80;${down + 1}M`);
+			await h.terminal.waitForRender();
+			assert.equal(h.scroll.scrollTop, 6);
+			setKeybindings(
+				new KeybindingsManager(TUI_KEYBINDINGS, {
+					"tui.altScreen.previousPrompt": "ctrl+u",
+					"tui.altScreen.nextPrompt": "ctrl+d",
+				}),
+			);
+			h.terminal.sendInput("\x15");
+			await h.terminal.waitForRender();
+			assert.equal(h.scroll.scrollTop, 0);
+			h.terminal.sendInput("\x04");
+			await h.terminal.waitForRender();
+			assert.equal(h.scroll.scrollTop, 6);
+		} finally {
+			h.tui.stop();
+		}
+	});
+
+	it("aligns a short final turn to the top and scrolls away without snapping", async () => {
+		const h = await createTimeline();
+		try {
+			const last = h.ticks().at(-1)!;
+			h.terminal.sendInput(`\x1b[<0;80;${last + 1}M`);
+			await h.terminal.waitForRender();
+			assert.equal(h.scroll.scrollTop, 18);
+			assert.ok(h.terminal.getViewport()[0].startsWith("question 3"));
+			assert.equal(h.scroll.isFollowingEnd, false);
+			h.terminal.sendInput("\x1b[<64;5;2M");
+			await h.terminal.waitForRender();
+			assert.equal(h.scroll.scrollTop, 17);
+			h.tui.scrollToBottom();
+			await h.terminal.waitForRender();
+			assert.equal(h.scroll.scrollTop, 14);
+			assert.equal(h.scroll.isFollowingEnd, true);
+		} finally {
+			h.tui.stop();
+		}
+	});
+
+	it("previews a turn and time without moving the viewport or capturing editor input", async () => {
+		const h = await createTimeline();
+		try {
+			const before = h.scroll.scrollTop;
+			h.terminal.sendInput(`\x1b[<35;80;${h.ticks()[0] + 1}M`);
+			await h.terminal.waitForRender();
+			assert.ok(h.terminal.getViewport().join("\n").includes("1700000000000"));
+			assert.ok(h.terminal.getViewport().join("\n").includes("question 0"));
+			assert.equal(h.scroll.scrollTop, before);
+			assert.equal(h.tui.getFocusedComponent(), h.editor);
+			h.terminal.sendInput("Z");
+			await h.terminal.waitForRender();
+			assert.deepEqual(h.inputs, ["Z"]);
+			assert.equal(h.tui.hasOverlay(), false);
+		} finally {
+			h.tui.stop();
+		}
+	});
+
+	it("hides previews and the rail on narrow resize, then restores the rail", async () => {
+		const h = await createTimeline();
+		try {
+			h.terminal.sendInput(`\x1b[<35;80;${h.ticks()[0] + 1}M`);
+			await h.terminal.waitForRender();
+			h.terminal.resize(40, 12);
+			await h.terminal.waitForRender();
+			assert.equal(h.tui.hasOverlay(), false);
+			assert.equal(h.scroll.rightGutterWidth, 0);
+			assert.ok(!h.terminal.getViewport().some((line) => line.endsWith("▲")));
+			h.terminal.resize(80, 12);
+			await h.terminal.waitForRender();
+			assert.equal(h.ticks().length, 4);
+			assert.equal(h.scroll.rightGutterWidth, 2);
+		} finally {
+			h.tui.stop();
+		}
+	});
+
+	it("drops previews when the transcript is replaced and does not cover focused dialogs", async () => {
+		const h = await createTimeline();
+		try {
+			h.terminal.sendInput(`\x1b[<35;80;${h.ticks()[0] + 1}M`);
+			await h.terminal.waitForRender();
+			assert.ok(h.tui.hasOverlay());
+			h.tui.setLayoutRoot(new Text("another transcript", 0, 0));
+			await h.terminal.waitForRender();
+			assert.equal(h.tui.hasOverlay(), false);
+			h.mount();
+			await h.terminal.waitForRender();
+			const overlay = h.tui.showOverlay(
+				{ render: () => ["dialog"], invalidate() {}, handleInput() {} },
+				{ width: 30 },
+			);
+			await h.terminal.waitForRender();
+			const before = h.previews();
+			h.terminal.sendInput("\x1b[<35;80;4M");
+			await h.terminal.waitForRender();
+			assert.equal(h.previews(), before);
+			assert.ok(h.terminal.getViewport().join("\n").includes("dialog"));
+			overlay.hide();
+		} finally {
+			h.tui.stop();
+		}
+	});
+});
+
+describe("preview panel", () => {
+	it("scrolls long content inside its own bounds and keeps Unicode within the width", () => {
+		const panel = new PreviewPanel(
+			new Text(Array.from({ length: 20 }, (_, i) => `行 ${i} e\u0301`).join("\n"), 0, 0),
+			{
+				maxHeight: () => 7,
+				border: (text) => text,
+				background: (text) => text,
+			},
+		);
+		assert.ok(panel.render(24).every((line) => visibleWidth(line) <= 24));
+		assert.ok(panel.render(24).join("\n").includes("行 0"));
+		panel.handleMouse({
+			type: "wheel",
+			button: "none",
+			x: 2,
+			y: 2,
+			screenX: 2,
+			screenY: 2,
+			width: 24,
+			height: 7,
+			wheelDelta: 5,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		});
+		assert.ok(!panel.render(24).join("\n").includes("行 0"));
+		assert.ok(panel.render(24).join("\n").includes("行 5"));
+		for (const width of [1, 4, 12, 24]) assert.ok(panel.render(width).every((line) => visibleWidth(line) <= width));
+	});
+});

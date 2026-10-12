@@ -348,7 +348,15 @@ export async function generateBranchSummary(
 	// so transient stream drops reuse the configured retry policy.
 	const context = normalizeContext({ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages });
 	const requestOptions: SimpleStreamOptions = { apiKey, headers, env, signal };
-	const response = await completeSummarization(model, context, requestOptions, streamFn, retry, callbacks);
+	const response = await completeSummarization(
+		model,
+		context,
+		requestOptions,
+		streamFn,
+		retry,
+		callbacks,
+		instructions,
+	);
 
 	// Check if aborted or errored
 	if (response.stopReason === "aborted") {
