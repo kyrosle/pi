@@ -1,7 +1,10 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
 	type CompactToolCallComponent,
 	CustomEditor,
 	type ExtensionAPI,
+	getAgentDir,
 	type KeybindingsManager,
 	parseSkillBlock,
 	type Theme,
@@ -22,6 +25,10 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+
+function isHoverDelay(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 0x7fffffff;
+}
 
 export class GrokEditor extends CustomEditor {
 	private bottomBorder = "";
@@ -172,7 +179,7 @@ export class GrokMenu extends Container {
 		this.hint.setText(
 			theme.fg(
 				"muted",
-				`${this.keybindings.getKeys("tui.select.confirm").join("/")} select   ${this.keybindings.getKeys("tui.select.cancel").join("/")} close`,
+				`${this.keybindings.getKeys("tui.select.confirm").join("/")} select   ${this.keybindings.getKeys("tui.select.cancel").join("/")} close\nHover delay: /grok-hover-delay <ms>`,
 			),
 		);
 		const innerWidth = Math.max(1, width - 2);
@@ -201,6 +208,13 @@ export class GrokMenu extends Container {
 
 export default function grokUi(pi: ExtensionAPI): void {
 	let activeTui: TUI | undefined;
+	let hoverDelayMs = 2000;
+	let settings: Record<string, unknown> = {};
+	const settingsPath = join(getAgentDir(), "grok-ui.json");
+	pi.registerMarkdownTransformer((markdown, { messageType }) => {
+		if (!markdown.trim() || messageType === "assistant-thinking") return markdown;
+		return `**${messageType === "user" ? "你" : "Pi"}**\n\n${markdown}`;
+	});
 	pi.registerToolRenderer((_name, next) => {
 		const renderers = next();
 		if (!renderers?.renderCall) return renderers;
@@ -215,8 +229,21 @@ export default function grokUi(pi: ExtensionAPI): void {
 		};
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
+		hoverDelayMs = 2000;
+		settings = {};
+		try {
+			const value: unknown = JSON.parse(await readFile(settingsPath, "utf8"));
+			if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a JSON object");
+			settings = value as Record<string, unknown>;
+			if ("hoverDelayMs" in value && !isHoverDelay(value.hoverDelayMs))
+				throw new Error("hoverDelayMs must be an integer between 0 and 2147483647 milliseconds");
+			if (isHoverDelay(settings.hoverDelayMs)) hoverDelayMs = settings.hoverDelayMs;
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+				ctx.ui.notify(`Could not load Grok UI settings: ${String(error)}`, "warning");
+		}
 		let leaf: string | null | undefined;
 		let timelineEntries: TranscriptTimelineEntry[] = [];
 		ctx.ui.setHeader((tui) => {
@@ -226,6 +253,7 @@ export default function grokUi(pi: ExtensionAPI): void {
 				if (mode === tui.mode) return;
 				mode = tui.mode;
 				if (isViewportTUI(tui)) {
+					tui.setHoverPreviewDelay?.(hoverDelayMs);
 					tui.setMouseHoverEnabled?.(true);
 					tui.setTimeline?.({
 						getEntries() {
@@ -318,8 +346,43 @@ export default function grokUi(pi: ExtensionAPI): void {
 			activeTui.hideHoverPreview?.();
 			activeTui.setTimeline?.(undefined);
 			activeTui.setMouseHoverEnabled?.(false);
+			activeTui.setHoverPreviewDelay?.(0);
 		}
 		activeTui = undefined;
+	});
+
+	pi.registerCommand("grok-hover-delay", {
+		description: "Set hover preview delay in milliseconds (default: 2000; 0: immediate)",
+		handler: async (args, ctx) => {
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("Hover preview settings require interactive mode.", "info");
+				return;
+			}
+			if (!args.trim()) {
+				ctx.ui.notify(
+					`Hover preview delay: ${hoverDelayMs} ms. Set with /grok-hover-delay <milliseconds>.`,
+					"info",
+				);
+				return;
+			}
+			const delay = Number(args.trim());
+			if (!isHoverDelay(delay)) {
+				ctx.ui.notify("Use an integer between 0 and 2147483647 milliseconds.", "error");
+				return;
+			}
+			const nextSettings = { ...settings, hoverDelayMs: delay };
+			try {
+				await mkdir(getAgentDir(), { recursive: true });
+				await writeFile(settingsPath, `${JSON.stringify(nextSettings, null, 2)}\n`, { mode: 0o600 });
+			} catch (error) {
+				ctx.ui.notify(`Could not save Grok UI settings: ${String(error)}`, "error");
+				return;
+			}
+			settings = nextSettings;
+			hoverDelayMs = delay;
+			if (activeTui && isViewportTUI(activeTui)) activeTui.setHoverPreviewDelay?.(delay);
+			ctx.ui.notify(`Hover preview delay: ${delay} ms. Saved to ${settingsPath}.`, "info");
+		},
 	});
 
 	pi.registerCommand("grok-ui", {

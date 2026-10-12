@@ -270,6 +270,9 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private timelineHovered: number | undefined;
 	private hoverOwner?: object;
 	private hoverOverlay?: OverlayHandle;
+	private hoverTimer?: NodeJS.Timeout;
+	// Extensions choose the timing; other preview callers retain immediate display.
+	private hoverDelayMs = 0;
 	private hoverSource?: { x: number; y: number; width: number; height: number; scrollTop: number };
 	private mouseHoverEnabled = false;
 
@@ -387,18 +390,21 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		return !this.mouseHoverEnabled && multiplexer ? ENABLE_BUTTON_MOTION_MOUSE : ENABLE_ALL_MOTION_MOUSE;
 	}
 
+	setHoverPreviewDelay(delayMs: number): void {
+		if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 0x7fffffff)
+			throw new RangeError("Hover preview delay must be an integer between 0 and 2147483647 milliseconds");
+		if (this.hoverDelayMs === delayMs) return;
+		this.hideHoverPreview();
+		this.hoverDelayMs = delayMs;
+	}
+
 	showHoverPreview(owner: object, component: Component, source: TuiMouseEvent): void {
 		if (this.hoverOwner === owner || this.isOverlayFocused() || this.selectionPressActive || this.mouseCapture)
 			return;
 		this.hideHoverPreview();
 		if (this.terminal.columns < 12 || this.terminal.rows < 6) return;
-		const viewport = this.currentLayout
-			? getScrollViewBox(this.currentLayout, this.getPrimaryScrollView())?.clip
-			: undefined;
-		const maxHeight = Math.min(Math.floor(this.terminal.rows * 0.7), viewport?.height ?? this.terminal.rows);
-		if (maxHeight < 4) return;
-		const width = Math.min(72, this.terminal.columns - 4);
-		const previewHeight = Math.min(maxHeight, component.render(width).length);
+		const columns = this.terminal.columns;
+		const rows = this.terminal.rows;
 		this.hoverOwner = owner;
 		this.hoverSource = {
 			x: source.screenX - source.x,
@@ -407,23 +413,53 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			height: source.height,
 			scrollTop: this.getPrimaryScrollView().scrollTop,
 		};
-		this.hoverOverlay = this.showOverlay(component, {
-			width,
-			row: Math.max(
-				viewport?.y ?? 1,
-				Math.min(
-					source.screenY + 1,
-					(viewport ? viewport.y + viewport.height : this.terminal.rows - 1) - previewHeight,
+		const show = () => {
+			this.hoverTimer = undefined;
+			if (
+				this.hoverOwner !== owner ||
+				this.stopped ||
+				this.isOverlayFocused() ||
+				this.selectionPressActive ||
+				this.mouseCapture ||
+				this.terminal.columns !== columns ||
+				this.terminal.rows !== rows ||
+				this.hoverSource?.scrollTop !== this.getPrimaryScrollView().scrollTop
+			) {
+				this.hideHoverPreview();
+				return;
+			}
+			const viewport = this.currentLayout
+				? getScrollViewBox(this.currentLayout, this.getPrimaryScrollView())?.clip
+				: undefined;
+			const maxHeight = Math.min(Math.floor(rows * 0.7), viewport?.height ?? rows);
+			if (maxHeight < 4) {
+				this.hideHoverPreview();
+				return;
+			}
+			const width = Math.min(72, columns - 4);
+			const previewHeight = Math.min(maxHeight, component.render(width).length);
+			this.hoverOverlay = this.showOverlay(component, {
+				width,
+				row: Math.max(
+					viewport?.y ?? 1,
+					Math.min(source.screenY + 1, (viewport ? viewport.y + viewport.height : rows - 1) - previewHeight),
 				),
-			),
-			col: Math.min(source.screenX, this.terminal.columns - width - 3),
-			margin: 1,
-			maxHeight,
-			nonCapturing: true,
-		});
+				col: Math.min(source.screenX, columns - width - 3),
+				margin: 1,
+				maxHeight,
+				nonCapturing: true,
+			});
+		};
+		if (this.hoverDelayMs === 0) show();
+		else {
+			this.hoverTimer = setTimeout(show, this.hoverDelayMs);
+			this.hoverTimer.unref?.();
+		}
 	}
 
 	hideHoverPreview(): void {
+		clearTimeout(this.hoverTimer);
+		this.hoverTimer = undefined;
 		const overlay = this.hoverOverlay;
 		this.hoverOverlay = undefined;
 		this.hoverOwner = undefined;
@@ -818,6 +854,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 		const wheelEvent = this.parseWheelEvent(data);
 		if (wheelEvent) {
+			if (this.hoverTimer) this.hideHoverPreview();
 			const lines = this.wheelScroll.next(wheelEvent.direction, performance.now());
 			// SGR mouse button codes use bit 3 (value 8) for the Alt modifier.
 			const wheelDelta =
@@ -1037,7 +1074,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			raw.x < previewBounds.col + previewBounds.width &&
 			raw.y >= previewBounds.row &&
 			raw.y < previewBounds.row + previewBounds.height;
-		if (this.hoverOverlay && !insideSource && !insidePreview) this.hideHoverPreview();
+		if (this.hoverOwner && !insidePreview && (!insideSource || event.type !== "move")) this.hideHoverPreview();
 
 		if (this.mouseCapture || this.mousePressTarget) {
 			const target = this.mouseCapture ?? this.mousePressTarget!;
@@ -1912,7 +1949,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
 		}
 		if (
-			this.hoverOverlay &&
+			this.hoverOwner &&
 			(this.isOverlayFocused() ||
 				this.previousScreenWidth !== width ||
 				this.previousScreenHeight !== height ||
