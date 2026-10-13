@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-12
+
 ### Breaking Changes
 
 - Removed `MCP_TYPESCRIPT_PREAMBLE` and `mcpStructuredContentSchema()`. `renderToolOutputType()` and the declarations built on it render every output schema as its own type and no longer turn MCP `CallToolResult` schemas into `CallToolResult<T>`; describe MCP results in the output schema instead
@@ -21,6 +23,7 @@
 
 ### Fixed
 
+- Fixed `parseCodemodeSource()` ignoring a `// @options:` line that is not the first line, so its `timeout_ms` never applied; it now throws `CodemodeSourceError` ([#10631](https://github.com/earendil-works/pi/issues/10631))
 - Fixed `CodemodeSandbox` failing with a broken bridge error when the host runs under `node --watch` on Node 24 or 26, which posts `watch:import`/`watch:require` messages on the worker channel ([#10725](https://github.com/earendil-works/pi/issues/10725))
 
 ## [1.1.0] - 2026-10-07
