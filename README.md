@@ -110,6 +110,57 @@ npm run check         # Lint, format, and type check
 ./pi-test.sh         # Run pi from sources (can be run from any directory)
 ```
 
+### Install this checkout locally
+
+On macOS or Linux with Node.js 22.19 or newer and npm, clone this fork and run:
+
+```bash
+cd /path/to/pi
+./install.sh
+export PATH="$HOME/.local/bin:$PATH"
+hash -r
+pi --version
+```
+
+The installer runs `npm ci --ignore-scripts`, builds the checkout, and installs
+all Pi dependencies from the same local package set. It verifies the isolated
+CLI and constructs a Grok timeline preview before switching `~/.local/bin/pi`
+to the new installation. No npm publication, Bun, or sudo is required.
+Valid local model data is reused; otherwise the normal build refreshes it.
+
+The CLI, Grok extension and helpers, and Grok theme come from one installation
+under `~/.local/share/pi-source/`. The launcher defaults to the Grok theme and
+fullscreen mode; explicit CLI options can override those defaults. Existing
+`grok-ui.ts`, `grok-ui.js`, and `grok.json` user resources are backed up and
+replaced with links to the installed resources, including existing legacy
+copies under `~/.tpi/agent`. Other extensions and user settings are retained.
+If `PI_CODING_AGENT_DIR` is set, use the same value for install and uninstall.
+
+To update, exit running Pi sessions, pull the desired source revision, and run
+the installer again:
+
+```bash
+git pull --ff-only
+./install.sh
+```
+
+Use this command instead of `pi update` for the source installation. A build or
+verification failure keeps the previous installation active. Older installation
+snapshots remain available until uninstall. Check `type -a pi` if another Pi
+installation earlier in PATH is still being selected. Use `./pi-test.sh` for
+development inside this repository, where project resources come from source.
+
+To uninstall:
+
+```bash
+./uninstall.sh
+```
+
+Uninstall removes the managed installation and restores any original launcher
+and Grok resources. It retains settings, credentials, sessions, and other
+extensions. It needs Node.js but no npm dependencies. If a managed link has been
+replaced manually, update and uninstall stop before overwriting that change.
+
 ### Using local packages outside the monorepo
 
 Build every public package into one coherent local artifact set:
