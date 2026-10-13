@@ -200,7 +200,12 @@ describe("AssistantMessageComponent", () => {
 		const component = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, [
 			(markdown, context) => {
 				calls.push("formula");
-				expect(context).toEqual({ messageType: "assistant", isStreaming: false, availableWidth: 78 });
+				expect(context).toEqual({
+					messageType: "assistant",
+					isStreaming: false,
+					availableWidth: 78,
+					model: message.model,
+				});
 				return markdown.replace("$x^2$", "x²");
 			},
 			(markdown) => {

@@ -1574,6 +1574,8 @@ export interface MarkdownTransformContext {
 	messageId?: string;
 	/** Persisted session-entry ISO timestamp. Undefined for live messages or live rendering; available when rendering from persisted session entries. */
 	timestamp?: string;
+	/** Model ID recorded on the assistant message, including historical replies. */
+	model?: string;
 }
 
 export type MarkdownTransformer = (markdown: string, context: MarkdownTransformContext) => string;

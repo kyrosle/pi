@@ -136,6 +136,7 @@ export class AssistantMessageComponent extends Container {
 							this.markdownTransformers,
 							this.messageId,
 							this.timestamp,
+							message.model,
 						),
 					}),
 				);
@@ -181,6 +182,7 @@ export class AssistantMessageComponent extends Container {
 									this.markdownTransformers,
 									this.messageId,
 									this.timestamp,
+									message.model,
 								),
 							},
 						);

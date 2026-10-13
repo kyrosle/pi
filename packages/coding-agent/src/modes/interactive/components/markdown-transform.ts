@@ -6,11 +6,12 @@ export function createMarkdownTransform(
 	transformers: readonly MarkdownTransformer[],
 	messageId?: string,
 	timestamp?: string,
+	model?: string,
 ): (markdown: string, availableWidth: number) => string {
 	return (markdown, availableWidth) =>
 		applyMarkdownTransformers(
 			markdown,
-			{ messageType, isStreaming, availableWidth, messageId, timestamp },
+			{ messageType, isStreaming, availableWidth, messageId, timestamp, ...(model === undefined ? {} : { model }) },
 			transformers,
 		);
 }
