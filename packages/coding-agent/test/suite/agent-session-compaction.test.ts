@@ -1,3 +1,4 @@
+import { rmSync } from "node:fs";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import {
 	type AssistantMessage,
@@ -13,6 +14,7 @@ import {
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "../../src/core/compaction/index.ts";
+import toolOutputContextExtension, { getToolOutputDirectory } from "../../src/extensions/tool-output-context/index.ts";
 import { createHarness, getUserTexts, type Harness } from "./harness.ts";
 
 type SessionWithCompactionInternals = {
@@ -129,7 +131,10 @@ describe("AgentSession compaction characterization", () => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 		while (harnesses.length > 0) {
-			harnesses.pop()?.cleanup();
+			const harness = harnesses.pop()!;
+			const archive = getToolOutputDirectory(harness.sessionManager);
+			if (archive) rmSync(archive, { recursive: true, force: true });
+			harness.cleanup();
 		}
 	});
 
@@ -502,6 +507,7 @@ describe("AgentSession compaction characterization", () => {
 				},
 				tools: [largeTool],
 				extensionFactories: [
+					toolOutputContextExtension,
 					(pi) => {
 						pi.on("session_before_compact", (event) => {
 							order.push("compaction");

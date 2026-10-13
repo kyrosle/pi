@@ -53,6 +53,9 @@ export type {
 	CompactionEntryDraft,
 	// Context
 	CompactOptions,
+	ContextBudgetEntryDraft,
+	ContextBudgetEvent,
+	ContextBudgetEventResult,
 	ContextEditEntryDraft,
 	// Events - Agent
 	ContextEvent,
@@ -189,6 +192,7 @@ export type {
 	ToolLoadout,
 	ToolLoadoutChanges,
 	ToolNamespace,
+	ToolRenderContext,
 	ToolRendererResolver,
 	ToolRenderers,
 	ToolRenderResultOptions,
