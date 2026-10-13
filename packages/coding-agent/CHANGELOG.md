@@ -8,6 +8,8 @@
 
 ### Changed
 
+- Changed Grok message headings to show the system username and each reply's recorded model ID, with one heading when the extension is loaded twice, and the Grok header to show the current model ID
+- Added the assistant message's model ID to Markdown transformer context
 - Moved Grok tool summaries and preview panels into the extension, retaining host support for pointer lifecycle and expanding individual tools
 - Moved complete tool-output archiving and bounded excerpts into a default built-in extension, using a validated context-budget hook while keeping request preflight and overflow recovery in the host
 - Changed Grok hover previews to wait two seconds by default, with `/grok-hover-delay` persisting an extension-owned delay setting

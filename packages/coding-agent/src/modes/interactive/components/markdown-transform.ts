@@ -4,9 +4,14 @@ export function createMarkdownTransform(
 	messageType: MarkdownTransformContext["messageType"],
 	isStreaming: boolean,
 	transformers: readonly MarkdownTransformer[],
+	model?: string,
 ): (markdown: string, availableWidth: number) => string {
 	return (markdown, availableWidth) =>
-		applyMarkdownTransformers(markdown, { messageType, isStreaming, availableWidth }, transformers);
+		applyMarkdownTransformers(
+			markdown,
+			{ messageType, isStreaming, availableWidth, ...(model === undefined ? {} : { model }) },
+			transformers,
+		);
 }
 
 function applyMarkdownTransformers(

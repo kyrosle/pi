@@ -1564,6 +1564,8 @@ export interface MarkdownTransformContext {
 	messageType: "user" | "assistant" | "assistant-thinking";
 	isStreaming: boolean;
 	availableWidth: number;
+	/** Model ID recorded on the assistant message, including historical replies. */
+	model?: string;
 }
 
 export type MarkdownTransformer = (markdown: string, context: MarkdownTransformContext) => string;
