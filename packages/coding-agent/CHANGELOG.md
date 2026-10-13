@@ -8,6 +8,8 @@
 
 ### Changed
 
+- Moved Grok tool summaries and preview panels into the extension, retaining host support for pointer lifecycle and expanding individual tools
+- Moved complete tool-output archiving and bounded excerpts into a default built-in extension, using a validated context-budget hook while keeping request preflight and overflow recovery in the host
 - Changed Grok hover previews to wait two seconds by default, with `/grok-hover-delay` persisting an extension-owned delay setting
 - Changed the Grok UI prototype to distinguish user messages and replies with role headings and a blue-gray user background, while reducing emphasis on thinking and tool output
 

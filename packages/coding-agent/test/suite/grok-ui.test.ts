@@ -6,6 +6,8 @@ import {
 	type Component,
 	Container,
 	CURSOR_MARKER,
+	getCapabilities,
+	setCapabilities,
 	setKeybindings,
 	Text,
 	type TUI,
@@ -17,6 +19,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultEditorTheme } from "../../../tui/test/test-themes.ts";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal.ts";
+import { PreviewPanel } from "../../examples/extensions/grok-ui/preview-panel.ts";
 import grokUi, { GrokEditor, GrokMenu } from "../../examples/extensions/grok-ui.ts";
 import type { ToolRenderContext, ToolRenderers } from "../../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
@@ -271,16 +274,16 @@ describe("Grok extension compatibility", () => {
 		const resolve = (name: string) =>
 			harness.session.extensionRunner.resolveToolRenderers(name, () => harness.session.getToolDefinition(name));
 		expect(resolve("edit")?.renderShell).toBe("self");
-		expect(resolve("edit")?.renderResult).toBe(harness.session.getToolDefinition("edit")?.renderResult);
+		expect(resolve("edit")?.renderResult).toBeTypeOf("function");
 		expect(resolve("unknown")).toBeUndefined();
 	});
 
-	it("shows queued, running, success and failure without replacing result renderers", async () => {
+	it("shows queued, running, success and failure while retaining original results", async () => {
 		const harness = await createHarness({ extensionFactories: [grokUi] });
 		harnesses.push(harness);
 		const original = harness.session.getToolDefinition("read");
 		const renderer = harness.session.extensionRunner.resolveToolRenderers("read", () => original);
-		expect(renderer?.renderResult).toBe(original?.renderResult);
+		expect(renderer?.renderResult).toBeTypeOf("function");
 		const tui = new TuiMainScreen(new VirtualTerminal());
 		const component = new ToolExecutionComponent(
 			"read",
@@ -328,6 +331,189 @@ describe("Grok extension compatibility", () => {
 		const first = renderer?.renderCall?.({}, theme, context);
 		renderer?.renderCall?.({}, theme, { ...context, lastComponent: first });
 		expect(renderCall.mock.calls[1]?.[2]).toMatchObject({ lastComponent: content });
+	});
+
+	it("preserves both renderer slots and their shared state across result updates", async () => {
+		const harness = await createHarness({ extensionFactories: [grokUi] });
+		harnesses.push(harness);
+		const call = new Text("custom call", 0, 0);
+		const result = new Text("custom result", 0, 0);
+		const renderCall = vi.fn<NonNullable<ToolRenderers["renderCall"]>>((_args, _theme, context) => {
+			context.state.call = call;
+			return call;
+		});
+		const renderResult = vi.fn<NonNullable<ToolRenderers["renderResult"]>>((_result, _options, _theme, context) => {
+			expect(context.state.call).toBe(call);
+			return result;
+		});
+		const renderer = harness.session.extensionRunner.resolveToolRenderers("custom", () => ({
+			renderCall,
+			renderResult,
+		}));
+		const component = new ToolExecutionComponent(
+			"custom",
+			"reuse",
+			{},
+			{},
+			renderer,
+			new TuiAltScreen(new VirtualTerminal()),
+			harness.tempDir,
+		);
+		component.updateResult({ content: [{ type: "text", text: "first" }], isError: false }, true);
+		component.updateResult({ content: [{ type: "text", text: "last" }], isError: false });
+		expect(renderCall.mock.lastCall?.[2].lastComponent).toBe(call);
+		expect(renderResult.mock.lastCall?.[3].lastComponent).toBe(result);
+		expect(renderResult.mock.lastCall?.[0].content).toEqual([{ type: "text", text: "last" }]);
+		component.setExpanded(true);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("custom result");
+	});
+
+	it("drops stale partial output when the final result renderer fails", async () => {
+		const harness = await createHarness({ extensionFactories: [grokUi] });
+		harnesses.push(harness);
+		const renderer = harness.session.extensionRunner.resolveToolRenderers("custom", () => ({
+			renderCall: () => new Text("custom call", 0, 0),
+			renderResult: (_result, options) => {
+				if (!options.isPartial) throw new Error("final renderer failed");
+				return new Text("old partial", 0, 0);
+			},
+		}));
+		const component = new ToolExecutionComponent(
+			"custom",
+			"failure",
+			{},
+			{},
+			renderer,
+			new TuiAltScreen(new VirtualTerminal()),
+			harness.tempDir,
+		);
+		component.setExpanded(true);
+		component.updateResult({ content: [{ type: "text", text: "partial" }], isError: false }, true);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("old partial");
+		component.updateResult({ content: [{ type: "text", text: "final fallback" }], isError: true });
+		const output = stripAnsi(component.render(80).join("\n"));
+		expect(output).toContain("final fallback");
+		expect(output).not.toContain("old partial");
+	});
+
+	it("falls back safely when expanded call and result components throw while rendering a hover", async () => {
+		const harness = await createHarness({ extensionFactories: [grokUi] });
+		harnesses.push(harness);
+		const tui = new TuiAltScreen(new VirtualTerminal());
+		vi.spyOn(tui, "transcriptViewportHeight", "get").mockReturnValue(20);
+		const show = vi.spyOn(tui, "showHoverPreview").mockImplementation(() => {});
+		let failCall = false;
+		const call = {
+			render: () => {
+				if (failCall) throw new Error("call render failed");
+				return ["custom call"];
+			},
+			invalidate() {},
+		};
+		const renderer = harness.session.extensionRunner.resolveToolRenderers("custom", () => ({
+			renderCall: () => call,
+			renderResult: (_result, options) => ({
+				render() {
+					if (options.expanded) throw new Error("result render failed");
+					return ["custom result"];
+				},
+				invalidate() {},
+			}),
+		}));
+		const component = new ToolExecutionComponent("custom", "hover-errors", {}, {}, renderer, tui, harness.tempDir);
+		component.updateResult({ content: [{ type: "text", text: "retained result" }], isError: false });
+		expect(component.render(80)).toHaveLength(2);
+		component.handleMouse({
+			type: "move",
+			button: "none",
+			x: 4,
+			y: 1,
+			screenX: 4,
+			screenY: 1,
+			width: 80,
+			height: 2,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		});
+		failCall = true;
+		const panel = show.mock.lastCall?.[1];
+		expect(panel).toBeDefined();
+		const preview = stripAnsi(panel!.render(72).join("\n"));
+		expect(preview).toContain("Tool call preview unavailable");
+		expect(preview).toContain("retained result");
+	});
+
+	it("keeps asynchronous edit previews and the final result diff", async () => {
+		const harness = await createHarness({ extensionFactories: [grokUi] });
+		harnesses.push(harness);
+		const file = join(harness.tempDir, "preview.txt");
+		writeFileSync(file, "before\n");
+		const renderer = harness.session.extensionRunner.resolveToolRenderers("edit", () =>
+			harness.session.getToolDefinition("edit"),
+		);
+		const component = new ToolExecutionComponent(
+			"edit",
+			"async-edit",
+			{ path: file, oldText: "before", newText: "after" },
+			{},
+			renderer,
+			new TuiAltScreen(new VirtualTerminal()),
+			harness.tempDir,
+		);
+		component.setExpanded(true);
+		component.setArgsComplete();
+		await vi.waitFor(() => expect(stripAnsi(component.render(80).join("\n"))).toContain("+1 after"));
+		component.updateResult({
+			content: [{ type: "text", text: "edited" }],
+			details: { diff: "-1 before\n+1 final", firstChangedLine: 1 },
+			isError: false,
+		});
+		const rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("+1 final");
+		expect(rendered).not.toContain("+1 after");
+	});
+
+	it("retains native images and fallback output when a custom call renderer fails", async () => {
+		const harness = await createHarness({ extensionFactories: [grokUi] });
+		harnesses.push(harness);
+		const capabilities = getCapabilities();
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		try {
+			for (const fail of [false, true]) {
+				const renderer = harness.session.extensionRunner.resolveToolRenderers("custom", () => ({
+					renderCall: () => {
+						if (fail) throw new Error("broken custom renderer");
+						return new Text("image call", 0, 0);
+					},
+				}));
+				const component = new ToolExecutionComponent(
+					"custom",
+					"image",
+					{},
+					{},
+					renderer,
+					new TuiAltScreen(new VirtualTerminal()),
+					harness.tempDir,
+				);
+				component.updateResult({
+					content: [
+						{ type: "text", text: "retained output" },
+						{
+							type: "image",
+							mimeType: "image/png",
+							data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==",
+						},
+					],
+					isError: false,
+				});
+				const rendered = component.render(80).join("\n");
+				expect(rendered).toContain("\x1b_G");
+				expect(stripAnsi(rendered)).toContain("retained output");
+			}
+		} finally {
+			setCapabilities(capabilities);
+		}
 	});
 });
 
@@ -542,7 +728,7 @@ describe("Grok timeline and compact tool previews", () => {
 		tui.setFocus(editor);
 		tui.start();
 		await terminal.waitForRender();
-		return { harness, terminal, tui, component, editor, viewport };
+		return { harness, terminal, tui, component, editor, viewport, document };
 	}
 
 	it("auto-collapses tool results and shows a scrollable, current preview without changing the draft or session", async () => {
@@ -644,6 +830,48 @@ describe("Grok timeline and compact tool previews", () => {
 		}
 	});
 
+	it("expands only the previewed tool when the panel is clicked", async () => {
+		const h = await scene(
+			"read",
+			{ path: "notes.txt" },
+			{
+				content: [{ type: "text", text: "first result" }],
+				isError: false,
+			},
+		);
+		try {
+			const renderer = h.harness.session.extensionRunner.resolveToolRenderers("read", () =>
+				h.harness.session.getToolDefinition("read"),
+			);
+			const second = new ToolExecutionComponent(
+				"read",
+				"second",
+				{ path: "second.txt" },
+				{},
+				renderer,
+				h.tui,
+				h.harness.tempDir,
+			);
+			second.updateResult({ content: [{ type: "text", text: "second result" }], isError: false });
+			h.document.addChild(second);
+			h.tui.renderNow();
+			const row = h.terminal.getViewport().findIndex((line) => line.includes("notes.txt")) + 1;
+			h.terminal.sendInput(`\x1b[<35;5;${row}M`);
+			await h.terminal.waitForRender();
+			const panelRow = h.terminal.getViewport().findIndex((line) => line.includes("Click to expand")) + 1;
+			expect(panelRow).toBeGreaterThan(0);
+			h.terminal.sendInput(`\x1b[<0;10;${panelRow}M`);
+			h.terminal.sendInput(`\x1b[<0;10;${panelRow}m`);
+			await h.terminal.waitForRender();
+			expect(h.tui.hasOverlay()).toBe(false);
+			expect(stripAnsi(h.component.render(100).join("\n"))).toContain("first result");
+			expect(second.render(100)).toHaveLength(2);
+			expect(h.tui.getFocusedComponent()).toBe(h.editor);
+		} finally {
+			h.tui.stop();
+		}
+	});
+
 	it("uses persisted user timestamps for timeline previews and releases its callbacks on shutdown", async () => {
 		const h = await scene(
 			"read",
@@ -664,5 +892,38 @@ describe("Grok timeline and compact tool previews", () => {
 		} finally {
 			h.tui.stop();
 		}
+	});
+});
+
+describe("Grok preview panel", () => {
+	it("scrolls long content inside its own bounds and keeps Unicode within the width", () => {
+		const panel = new PreviewPanel(
+			new Text(Array.from({ length: 20 }, (_, i) => `行 ${i} e\u0301`).join("\n"), 0, 0),
+			{
+				maxHeight: () => 7,
+				border: (text) => text,
+				background: (text) => text,
+			},
+		);
+		expect(panel.render(24).every((line) => visibleWidth(line) <= 24)).toBe(true);
+		expect(panel.render(24).join("\n").includes("行 0")).toBe(true);
+		panel.handleMouse({
+			type: "wheel",
+			button: "none",
+			x: 2,
+			y: 2,
+			screenX: 2,
+			screenY: 2,
+			width: 24,
+			height: 7,
+			wheelDelta: 5,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		});
+		expect(!panel.render(24).join("\n").includes("行 0")).toBe(true);
+		expect(panel.render(24).join("\n").includes("行 5")).toBe(true);
+		for (const width of [1, 4, 12, 24])
+			expect(panel.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
 	});
 });

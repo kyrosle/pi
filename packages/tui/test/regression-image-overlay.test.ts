@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { PreviewPanel } from "../src/components/preview-panel.ts";
 import { Text } from "../src/components/text.ts";
 import {
 	allocateImageId,
@@ -74,11 +73,12 @@ describe("images below overlays", () => {
 		const editor = new Text("draft", 0, 0);
 		tui.addChild(editor);
 		tui.setFocus(editor);
-		const panel = new PreviewPanel(new Text("DIFF_ONE\nDIFF_TWO\nDIFF_THREE", 0, 0), {
-			maxHeight: () => 7,
-			border: (text) => text,
-			background: (text) => `\x1b[48;2;20;20;20m${text}\x1b[49m`,
-		});
+		const panel = new Text(
+			"╭─\n│ DIFF_ONE\n│ DIFF_TWO\n│ DIFF_THREE\n╰─",
+			0,
+			0,
+			(text) => `\x1b[48;2;20;20;20m${text}\x1b[49m`,
+		);
 		const source: TuiMouseEvent = {
 			type: "move",
 			button: "none",

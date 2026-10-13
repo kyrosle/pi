@@ -117,6 +117,10 @@ Handlers are awaited in stream order, so slow handlers delay stream consumption.
 
 `turn_end` and `agent_before_settle` are actionable boundaries. Their handlers can chain proposed `custom`, `custom_message`, `context_edit`, or `compaction` entries and return `continue: true` for one next model request. Guard continuation conditions because an unconditional continuation can loop. Use the exported event declarations for the complete validation and ordering contract.
 
+This fork also exposes `context_budget` when the host prepares oversized context or retries an overflow. The host supplies a tool-content byte budget in `maxBytes` and the projected conversation in `context`. Handlers may return `custom` and `context_edit` drafts; the host validates the combined projection and commits only after every handler succeeds. A handler failure stops the request. When `maxBytes` is omitted, the event only queries recovery metadata and must not return edits. `recoveryContext` supplies references to keep when recovery summarizes the entire conversation. The built-in `tool-output-context` extension uses this hook to archive complete results before replacing their model-facing content with bounded excerpts.
+
+The archive extension loads by default. `--no-extensions` or the `-builtin:tool-output-context` extension setting disables it; use `--extension builtin:tool-output-context` to load it explicitly while other extensions are disabled. Request preflight and overflow recovery remain host behavior.
+
 <a id="cache_warming_decision"></a>
 
 `cache_warming_decision` can override an idle prompt-cache refresh with `{ action: "warm" }` or `{ action: "stop" }`. The last handler that returns an action wins.
@@ -191,6 +195,8 @@ Pi records the initial prompt and tool set in the transcript's first system mess
 ### Tool rendering
 
 A tool's `renderCall` and `renderResult` draw its calls in the interactive transcript and in HTML exports. `pi.registerToolRenderer((toolName, next) => renderers)` chooses renderers for calls to any tool, including tools that are not registered yet, such as MCP tools in a resumed session before their server connected. `next()` returns what the remaining resolvers (in extension load order), then the registered tool, would use, so `next() ?? mine` only fills in.
+
+In this fork, interactive tool render contexts also expose optional `tui` and `setExpanded(expanded)` fields. They let an extension show a pointer preview and expand that one tool without changing other rows. Renderers must still work when these fields are absent, such as in HTML exports.
 
 ### MCP servers
 

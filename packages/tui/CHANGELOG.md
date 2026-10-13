@@ -5,7 +5,7 @@
 ### Added
 
 - Added an optional `setHoverPreviewDelay()` hook with cancellation while waiting, so extensions can configure pointer-preview timing without duplicating viewport mouse handling
-- Added an opt-in fullscreen conversation timeline with pointer previews and turn navigation, non-capturing hover previews, and the scrollable `PreviewPanel` component
+- Added an opt-in fullscreen conversation timeline with pointer previews and turn navigation, and non-capturing hover previews; the Grok extension owns its scrollable preview component
 
 ### Fixed
 
