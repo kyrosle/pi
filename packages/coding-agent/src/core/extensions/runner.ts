@@ -38,6 +38,9 @@ import type {
 	CacheWarmingDecisionEvent,
 	CacheWarmingDecisionEventResult,
 	CompactOptions,
+	ContextBudgetEntryDraft,
+	ContextBudgetEvent,
+	ContextBudgetEventResult,
 	ContextEvent,
 	ContextEventResult,
 	ContextUsage,
@@ -188,6 +191,7 @@ type RunnerEmitEvent = Exclude<
 	| UserBashEvent
 	| ContextEvent
 	| ContextWithSystemEvent
+	| ContextBudgetEvent
 	| CacheWarmingDecisionEvent
 	| BeforeProviderRequestEvent
 	| BeforeProviderHeadersEvent
@@ -1031,6 +1035,43 @@ export class ExtensionRunner {
 			return this.reloadHandler();
 		};
 		return context;
+	}
+
+	async emitContextBudget(
+		maxBytes: number | undefined,
+		buildContext: (entries: SessionBoundaryDraft[]) => BoundaryContextPreview | Promise<BoundaryContextPreview>,
+	): Promise<ContextBudgetEventResult> {
+		const ctx = this.createContext();
+		const entries: ContextBudgetEntryDraft[] = [];
+		const references: string[] = [];
+		let context = await buildContext(entries);
+		for (const { ext, handlers } of snapshotEventHandlers(this.extensions, "context_budget")) {
+			for (const handler of handlers) {
+				try {
+					const result = (await handler({ type: "context_budget", maxBytes, context }, ctx)) as
+						| ContextBudgetEventResult
+						| undefined;
+					if (result?.entries?.length) {
+						if (maxBytes === undefined) throw new Error("A context budget metadata query cannot append entries");
+						if (result.entries.some((entry) => entry.type !== "custom" && entry.type !== "context_edit")) {
+							throw new Error("Context budget handlers may only append custom and context_edit entries");
+						}
+						entries.push(...result.entries);
+						context = await buildContext(entries);
+					}
+					if (result?.recoveryContext) references.push(result.recoveryContext);
+				} catch (error) {
+					this.emitError({
+						extensionPath: ext.path,
+						event: "context_budget",
+						error: error instanceof Error ? error.message : String(error),
+						stack: error instanceof Error ? error.stack : undefined,
+					});
+					throw error;
+				}
+			}
+		}
+		return { entries, recoveryContext: references.length ? references.join("\n") : undefined };
 	}
 
 	async emitBoundary(

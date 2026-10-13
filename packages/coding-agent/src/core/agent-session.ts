@@ -146,7 +146,6 @@ import {
 	type NormalizedBuildSystemPromptOptions,
 	normalizeBuildSystemPromptOptions,
 } from "./system-prompt.ts";
-import { getToolOutputDirectory, limitToolOutputContext } from "./tool-output-context.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
@@ -782,17 +781,22 @@ export class AgentSession {
 		return Math.max(1, model.contextWindow - Math.min(reserve, Math.floor(model.contextWindow / 4)));
 	}
 
-	private async _limitToolOutputContext(model: Model<string>): Promise<boolean> {
-		const budget = this._contextInputBudget(model);
-		const recent = this.settingsManager.getCompactionSettings(this.model).keepRecentTokens;
-		const bytes = Math.floor(
-			Math.min(recent || budget / 4, budget / 2) * (this._overflowRecoveryAttempted ? this._overflowBudgetScale : 4),
+	private async _applyContextBudget(model?: Model<string>): Promise<{ changed: boolean; recoveryContext?: string }> {
+		let maxBytes: number | undefined;
+		if (model) {
+			const budget = this._contextInputBudget(model);
+			const recent = this.settingsManager.getCompactionSettings(this.model).keepRecentTokens;
+			maxBytes = Math.floor(
+				Math.min(recent || budget / 4, budget / 2) *
+					(this._overflowRecoveryAttempted ? this._overflowBudgetScale : 4),
+			);
+		}
+		const result = await this._extensionRunner.emitContextBudget(maxBytes, (entries) =>
+			this._buildBoundaryContext(entries, "turn_end"),
 		);
-		const edits = await limitToolOutputContext(this.sessionManager, bytes);
-		if (edits.length === 0) return false;
-		this._refreshFinalizedContext();
-		for (const entry of edits) this._emit({ type: "entry_appended", entry });
-		return true;
+		const entries = result.entries ?? [];
+		if (entries.length) this._commitBoundaryDrafts(entries);
+		return { changed: entries.length > 0, recoveryContext: result.recoveryContext };
 	}
 
 	private async _prepareContextForModel(
@@ -801,7 +805,10 @@ export class AgentSession {
 	): Promise<boolean> {
 		if (model.contextWindow <= 0 || !this.settingsManager.getCompactionEnabled()) return false;
 		let projection = preparedProjection ?? this.sessionManager.buildSessionProjection();
-		if (!projection.messages.some((message) => message.role === "toolResult") && this._overflowBudgetScale === 1)
+		if (
+			!projection.messages.some((message) => message.role === "toolResult") &&
+			(this._overflowBudgetScale === 1 || !(await this._applyContextBudget()).recoveryContext)
+		)
 			return false;
 		if (!this._exceedsCompactionThreshold(model, projection) && !this._overflowRecoveryAttempted) return false;
 		const leafBefore = this.sessionManager.getLeafId();
@@ -3108,7 +3115,11 @@ export class AgentSession {
 
 			if (
 				this._overflowRecoveryAttempted &&
-				!(contextOverflow && getToolOutputDirectory(this.sessionManager) && this._overflowBudgetScale > 1 / 16)
+				!(
+					contextOverflow &&
+					this._overflowBudgetScale > 1 / 16 &&
+					(await this._applyContextBudget()).recoveryContext
+				)
 			) {
 				const errorMessage = contextOverflow
 					? "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model."
@@ -3199,26 +3210,28 @@ export class AgentSession {
 		let started = false;
 		let fromExtension = false;
 		let cancelledByExtension = false;
+		const originalPreparation = prepareCompaction(this.sessionManager.getBranch(), settings);
+		const limitsModel = this._limitsModel();
+		// Budget-handler failures must stop the request before compaction can swallow the error and continue.
+		const budgetResult =
+			model && limitsModel && limitsModel.contextWindow > 0
+				? await this._applyContextBudget(limitsModel)
+				: { changed: false, recoveryContext: undefined };
 
 		try {
 			if (!model) {
 				return false;
 			}
 
-			const originalPreparation = prepareCompaction(this.sessionManager.getBranch(), settings);
-			const limitsModel = this._limitsModel();
-			const limitedOutputs =
-				limitsModel && limitsModel.contextWindow > 0 ? await this._limitToolOutputContext(limitsModel) : false;
 			if (this._isAgentRunActive && (this._agentRunAbortRequested || this.agent.signal?.aborted)) return false;
 			let pathEntries = this.sessionManager.getBranch();
 			let preparation = prepareCompaction(pathEntries, settings) ?? originalPreparation;
 			if (compactEntireContext) {
 				const projection = this.sessionManager.buildSessionProjection();
-				const directory = getToolOutputDirectory(this.sessionManager);
-				const boundaryId = directory
+				const boundaryId = budgetResult.recoveryContext
 					? this.sessionManager.appendCustomMessageEntry(
-							"tool-output-archive",
-							`Full tool outputs are retained in ${directory}. Read the .txt files in bounded pieces; .json files retain complete results and images.`,
+							"context-budget-recovery",
+							budgetResult.recoveryContext,
 							false,
 						)
 					: this.sessionManager.appendCustomEntry("context-budget-boundary");
@@ -3243,7 +3256,7 @@ export class AgentSession {
 				};
 			}
 			if (!preparation) {
-				return willRetry && limitedOutputs;
+				return willRetry && budgetResult.changed;
 			}
 
 			abortController = new AbortController();

@@ -14,9 +14,16 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { completeSummarization, estimateTokens } from "../../src/core/compaction/compaction.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
-import { getToolOutputDirectory } from "../../src/core/tool-output-context.ts";
 import { createReadTool } from "../../src/core/tools/read.ts";
-import { createHarness, type Harness } from "./harness.ts";
+import toolOutputContextExtension, { getToolOutputDirectory } from "../../src/extensions/tool-output-context/index.ts";
+import { createHarness as createBaseHarness, type Harness, type HarnessOptions } from "./harness.ts";
+
+function createHarness(options: HarnessOptions = {}): Promise<Harness> {
+	return createBaseHarness({
+		...options,
+		extensionFactories: [toolOutputContextExtension, ...(options.extensionFactories ?? [])],
+	});
+}
 
 const harnesses: Harness[] = [];
 const directories: string[] = [];
@@ -102,6 +109,7 @@ describe("context budget recovery", () => {
 		expect(readFileSync(harness.sessionManager.getSessionFile()!, "utf8")).toContain(JSON.stringify(full));
 		expect(statSync(originalPath).mode & 0o777).toBe(0o600);
 		const resumed = SessionManager.open(harness.sessionManager.getSessionFile()!);
+		expect(getToolOutputDirectory(resumed)).toBe(getToolOutputDirectory(harness.sessionManager));
 		expect(resumed.getEntries().some((entry) => entry.type === "context_edit")).toBe(true);
 		expect(
 			resumed
