@@ -38,7 +38,6 @@ The package includes components for common layouts and controls:
 - `ScrollView` provides a bounded scrollable viewport.
 - `Loader` and `CancellableLoader` report ongoing work.
 - `MouseRegion` adds pointer behavior around another component.
-- `PreviewPanel` bounds a pointer preview and scrolls its content independently.
 
 Prefer these components over rebuilding selection, scrolling, text editing, or width handling. The extension examples show how to combine them with Pi’s borders and themes.
 
@@ -158,7 +157,9 @@ Call `setMouseHoverEnabled(true)` for previews that need pointer motion, includi
 
 `setHoverPreviewDelay(milliseconds)` lets an extension choose the delay; the renderer defaults to zero. Repeated movement inside the same source keeps the original deadline. Leaving, typing, scrolling, resizing, opening a focused dialog or replacing the transcript cancels a pending preview. Changing the delay and stopping the renderer also cancel it. Reset the delay to zero on extension shutdown. These hooks belong to this fork; custom dialogs and overlays themselves use Pi's existing public APIs.
 
-A call renderer can return a `CompactToolCallComponent` with `compactToolCall: true` to opt into a one-line fullscreen tool summary. Hover renders the existing call/result details expanded in a `PreviewPanel`; the panel scrolls independently, and clicking expands inline. The normal expansion shortcut remains available. A component may set the flag to `false` to retain its display. Output-only renderers and native image output keep their existing display. Regular mode retains the original tool layout. See [`grok-ui.ts`](../examples/extensions/grok-ui.ts) for lifecycle, theme and component-reuse handling.
+The Grok extension uses `registerToolRenderer()` to compose one-line fullscreen tool summaries and owns its scrollable `PreviewPanel`. It calls the original call/result renderers and preserves their shared state and component reuse, including final edit-diff reconciliation. The fork adds `tui` and `setExpanded()` to `ToolRenderContext` so a renderer can request a host-managed hover preview and expand only its own tool. Output-only renderers, explicit `compactToolCall: false` components and native image output keep their existing display. Regular mode retains the original tool layout. See [`grok-ui.ts`](../examples/extensions/grok-ui.ts) and its helpers for the extension-owned presentation.
+
+See the [Grok UI prototype](grok-ui-prototype.md) for this fork's extension setup and interaction checks.
 
 ## Apply themes correctly
 

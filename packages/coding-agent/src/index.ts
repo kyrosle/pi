@@ -79,6 +79,9 @@ export type {
 	CacheWarmingDecisionEventResult,
 	CompactionEntryDraft,
 	CompactOptions,
+	ContextBudgetEntryDraft,
+	ContextBudgetEvent,
+	ContextBudgetEventResult,
 	ContextEditEntryDraft,
 	ContextEvent,
 	ContextEventResult,
@@ -181,6 +184,7 @@ export type {
 	ToolLoadout,
 	ToolLoadoutChanges,
 	ToolNamespace,
+	ToolRenderContext,
 	ToolRendererResolver,
 	ToolRenderers,
 	ToolRenderResultOptions,
@@ -412,6 +416,7 @@ export { type CodemodeExtensionOptions, createCodemodeExtension } from "./extens
 export type { CodemodeStoreEntryData, CodemodeToolDetails } from "./extensions/codemode/tool.ts";
 export type { LoadedMcpConfig, McpExposure, McpServerConfig, McpServerEntry } from "./extensions/mcp/config.ts";
 export { createMcpExtension, type McpExtensionOptions, type McpTransportFactory } from "./extensions/mcp/index.ts";
+export { createToolOutputContextExtension } from "./extensions/tool-output-context/index.ts";
 export { createToolSearchExtension } from "./extensions/tool-search/index.ts";
 // Main entry point
 export { type MainOptions, main } from "./main.ts";
@@ -441,7 +446,6 @@ export {
 	BorderedLoader,
 	BranchSummaryMessageComponent,
 	CompactionSummaryMessageComponent,
-	type CompactToolCallComponent,
 	CustomEditor,
 	type CustomEditorOptions,
 	CustomMessageComponent,

@@ -831,6 +831,12 @@ pi.on("context_with_system", async (event, ctx) => {
 
 Rules: keep a system message at index 0 (providers read the prompt and initial tool declarations there; Pi reports an error if a handler drops it). Removing a system message removes the tool declarations and section patches it carries. Check your output with `getCurrentSystemPrompt()` and `getCurrentTools()` from `@earendil-works/pi-ai`. Handlers run in extension load order; a `systemPrompt` forced from `before_agent_start` is still projected onto the request afterwards.
 
+#### context_budget
+
+This fork also exposes `context_budget` when the host prepares oversized context or retries an overflow. The host supplies a tool-content byte budget in `maxBytes` and the projected conversation in `context`. Handlers may return `custom` and `context_edit` drafts; the host validates the combined projection and commits only after every handler succeeds. A handler failure stops the request. When `maxBytes` is omitted, the event only queries recovery metadata and must not return edits. `recoveryContext` supplies references to keep when recovery summarizes the entire conversation. The built-in `tool-output-context` extension uses this hook to archive complete results before replacing their model-facing content with bounded excerpts.
+
+The archive extension loads by default. `--no-extensions` or the `-builtin:tool-output-context` extension setting disables it; use `--extension builtin:tool-output-context` to load it explicitly while other extensions are disabled. Request preflight and overflow recovery remain host behavior.
+
 #### before_provider_headers
 
 Fired after the outgoing HTTP headers are assembled. Use it to add, override, or remove request headers.
@@ -2522,6 +2528,8 @@ pi.registerTool({
 - `outputPad` - horizontal padding from the `outputPad` setting; renderers with `renderShell: "self"` apply it themselves
 
 Use `context.state` for cross-slot shared state. Keep slot-local caches on the returned component instance when you want to reuse and mutate the same component across renders.
+
+In this fork, interactive tool render contexts also expose optional `tui` and `setExpanded(expanded)` fields. They let an extension show a pointer preview and expand that one tool without changing other rows. Renderers must still work when these fields are absent, such as in HTML exports.
 
 #### renderCall
 

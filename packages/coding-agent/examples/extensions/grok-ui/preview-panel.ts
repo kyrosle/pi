@@ -1,6 +1,11 @@
-import type { Component, TuiMouseEvent, TuiMouseEventResult } from "../tui.ts";
-import { truncateToWidth, visibleWidth } from "../utils.ts";
-import { ScrollView } from "./scroll-view.ts";
+import {
+	type Component,
+	ScrollView,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 
 export interface PreviewPanelOptions {
 	maxHeight: () => number;

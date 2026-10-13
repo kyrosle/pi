@@ -4,15 +4,11 @@ import {
 	Container,
 	getCapabilities,
 	Image,
-	isViewportTUI,
 	MouseRegion,
-	PreviewPanel,
 	Spacer,
-	stripTerminalSequences,
 	Text,
 	type TUI,
 	type TuiMouseEvent,
-	truncateToWidth,
 } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext, ToolRenderers } from "../../../core/extensions/types.ts";
 
@@ -30,11 +26,6 @@ export interface ToolExecutionOptions {
 	showImages?: boolean;
 	imageWidthCells?: number;
 	outputPad?: number;
-}
-
-/** Opt-in on a call renderer's component; execution and result renderers stay unchanged. */
-export interface CompactToolCallComponent extends Component {
-	readonly compactToolCall: boolean;
 }
 
 export class ToolExecutionComponent extends Container {
@@ -72,7 +63,6 @@ export class ToolExecutionComponent extends Container {
 		durationMs?: number;
 	};
 	private hideComponent = false;
-	private compactVisible = false;
 
 	constructor(
 		toolName: string,
@@ -131,6 +121,11 @@ export class ToolExecutionComponent extends Container {
 
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
 		return {
+			tui: this.ui,
+			setExpanded: (expanded) => {
+				this.setExpanded(expanded);
+				this.ui.requestRender();
+			},
 			args: this.args,
 			toolCallId: this.toolCallId,
 			invalidate: () => {
@@ -243,25 +238,8 @@ export class ToolExecutionComponent extends Container {
 
 	override render(width: number): string[] {
 		if (this.argsPending) this.updateDisplay();
-		this.compactVisible = false;
 		if (this.hideComponent) {
 			return [];
-		}
-		if (this.isCompact()) {
-			const padding = this.getRenderShell() === "self" ? 0 : this.outputPad;
-			const content = this.callRendererComponent ?? this.createCallFallback();
-			const lines = content.render(Math.max(1, width - padding * 2));
-			const header = lines.find((line) => stripTerminalSequences(line).trim().length > 0);
-			if (header !== undefined) {
-				this.compactVisible = true;
-				const text = truncateToWidth(" ".repeat(padding) + header, width, "", true);
-				const background = this.isPartial
-					? "toolPendingBg"
-					: this.result?.isError
-						? "toolErrorBg"
-						: "toolSuccessBg";
-				return ["", theme.bg(background, text)];
-			}
 		}
 
 		if (this.hasRendererDefinition() && this.getRenderShell() === "self") {
@@ -293,46 +271,6 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]> {
-		if (this.compactVisible && this.isCompact() && event.y > 0 && isViewportTUI(this.ui)) {
-			const ui = this.ui;
-			const target = {
-				component: this,
-				originX: event.screenX - event.x,
-				originY: event.screenY - event.y,
-				width: event.width,
-				height: event.height,
-			};
-			if (event.type === "move" && event.button === "none") {
-				this.ui.showHoverPreview?.(
-					this,
-					new PreviewPanel(
-						{
-							render: (width) => this.renderExpandedPreview(width),
-							invalidate() {},
-						},
-						{
-							maxHeight: () =>
-								Math.min(Math.floor(ui.terminal.rows * 0.7), ui.transcriptViewportHeight ?? ui.terminal.rows),
-							border: (text) => theme.fg("borderMuted", text),
-							background: (text) => theme.bg("toolPendingBg", text),
-							hint: () => "Click to expand",
-							onClick: () => {
-								if (isViewportTUI(this.ui)) this.ui.hideHoverPreview?.();
-								this.setExpanded(true);
-								this.ui.requestRender();
-							},
-						},
-					),
-					event,
-				);
-				return { handled: true, render: false, target };
-			}
-			if (event.type === "click" && event.button === "left" && this.result) {
-				this.ui.hideHoverPreview?.();
-				this.setExpanded(true);
-				return { handled: true, target };
-			}
-		}
 		if (!this.hasRendererDefinition() || this.getRenderShell() !== "self") return super.handleMouse(event);
 		if (event.y <= 0 || event.y > this.selfRenderHeight) return undefined;
 		return this.selfRenderContainer.handleMouse({
@@ -340,54 +278,6 @@ export class ToolExecutionComponent extends Container {
 			y: event.y - 1,
 			height: this.selfRenderHeight,
 		});
-	}
-
-	private isCompact(): boolean {
-		const call = this.callRendererComponent;
-		return (
-			isViewportTUI(this.ui) &&
-			!this.expanded &&
-			this.imageComponents.length === 0 &&
-			call !== undefined &&
-			"compactToolCall" in call &&
-			call.compactToolCall === true
-		);
-	}
-
-	private renderExpandedPreview(width: number): string[] {
-		const context = { ...this.getRenderContext(undefined), expanded: true };
-		const lines: string[] = [];
-		try {
-			const call = this.getCallRenderer()?.(this.args, theme, context);
-			lines.push(
-				...(call?.render(width) ??
-					new Text(formatToolCallWithArgs(this.toolName, this.args, theme, true), 0, 0).render(width)),
-			);
-		} catch {
-			lines.push(...new Text(formatToolCallWithArgs(this.toolName, this.args, theme, true), 0, 0).render(width));
-		}
-		if (this.result) {
-			try {
-				const render = this.getResultRenderer();
-				if (render) {
-					const result = render(
-						{
-							content: this.result.content as Parameters<typeof render>[0]["content"],
-							details: this.result.details,
-						},
-						{ expanded: true, isPartial: this.isPartial },
-						theme,
-						context,
-					);
-					lines.push(...result.render(width));
-				} else {
-					lines.push(...new Text(theme.fg("toolOutput", this.getTextOutput()), 0, 0).render(width));
-				}
-			} catch {
-				lines.push(...new Text(theme.fg("toolOutput", this.getTextOutput()), 0, 0).render(width));
-			}
-		}
-		return lines;
 	}
 
 	private updateDisplay(): void {

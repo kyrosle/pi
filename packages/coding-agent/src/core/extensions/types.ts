@@ -471,6 +471,10 @@ export interface ToolRenderResultOptions {
 
 /** Context passed to tool renderers. */
 export interface ToolRenderContext<TState = any, TArgs = any> {
+	/** Interactive renderer hosting this tool, when available. */
+	tui?: TUI;
+	/** Change this tool's inline expansion without affecting other tool rows. */
+	setExpanded?: (expanded: boolean) => void;
 	/** Current tool call arguments. Shared across call/result renders for the same tool call. */
 	args: TArgs;
 	/** Unique id for this tool execution. Stable across call/result renders for the same tool call. */
@@ -1030,6 +1034,23 @@ export interface BoundaryResult {
 	continue?: boolean;
 }
 
+export type ContextBudgetEntryDraft = CustomEntryDraft | ContextEditEntryDraft;
+
+/** Fired when the host needs to reduce context before a request or overflow retry. */
+export interface ContextBudgetEvent {
+	type: "context_budget";
+	/** Tool-content byte budget. Omitted for a read-only query of recovery metadata. */
+	maxBytes?: number;
+	context: BoundaryContextPreview;
+}
+
+export interface ContextBudgetEventResult {
+	/** Appended after all handlers succeed and the projected context validates. */
+	entries?: ContextBudgetEntryDraft[];
+	/** References to retain if recovery must summarize the entire projected conversation. */
+	recoveryContext?: string;
+}
+
 /** Fired before final settlement. May append entries and ensure one next provider request. */
 export interface AgentBeforeSettleEvent extends BoundaryState {
 	type: "agent_before_settle";
@@ -1415,6 +1436,7 @@ export type ExtensionEvent =
 	| SessionEvent
 	| ContextEvent
 	| ContextWithSystemEvent
+	| ContextBudgetEvent
 	| CacheWarmingDecisionEvent
 	| BeforeProviderRequestEvent
 	| BeforeProviderHeadersEvent
@@ -1634,6 +1656,7 @@ export interface ExtensionAPI {
 	on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): () => void;
 	on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): () => void;
 	on(event: "context_with_system", handler: ExtensionHandler<ContextWithSystemEvent, ContextEventResult>): () => void;
+	on(event: "context_budget", handler: ExtensionHandler<ContextBudgetEvent, ContextBudgetEventResult>): () => void;
 	on(
 		event: "cache_warming_decision",
 		handler: ExtensionHandler<CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult>,

@@ -7,6 +7,8 @@
 - Added `replaceControlCharacters()` to replace runs of C0 and C1 control characters with a space
 - Added `Component.capturesViewportInput`. While a component that sets it has focus, `TuiAltScreen` sends viewport keys such as PageUp/PageDown to it instead of scrolling the transcript, as it already does for focused overlays. `SelectList`, `SettingsList`, and `Editor` with open autocomplete set it ([#7629](https://github.com/earendil-works/pi/issues/7629), based on [#7680](https://github.com/earendil-works/pi/pull/7680) by [@muyiyr](https://github.com/muyiyr))
 - Added `getSelectPageIndex()` to compute the selection after a `tui.select.pageUp` or `tui.select.pageDown` key ([#7629](https://github.com/earendil-works/pi/issues/7629), based on [#7680](https://github.com/earendil-works/pi/pull/7680) by [@muyiyr](https://github.com/muyiyr))
+- Added an optional `setHoverPreviewDelay()` hook with cancellation while waiting, so extensions can configure pointer-preview timing without duplicating viewport mouse handling
+- Added an opt-in fullscreen conversation timeline with pointer previews and turn navigation, and non-capturing hover previews; the Grok extension owns its scrollable preview component
 
 ### Fixed
 
@@ -15,6 +17,7 @@
 - Fixed `ProcessTerminal.setTitle()` writing control characters from the title, which could end the title sequence and send the rest to the terminal as escape sequences
 - Fixed display math wider than the content width being wrapped row by row, which split fractions and sums apart. It now falls back to the raw LaTeX source ([#11483](https://github.com/earendil-works/pi/issues/11483))
 - Fixed `tui.select.pageUp` and `tui.select.pageDown` being ignored by `SelectList`, `SettingsList`, and editor autocomplete ([#7629](https://github.com/earendil-works/pi/issues/7629), based on [#7680](https://github.com/earendil-works/pi/pull/7680) by [@muyiyr](https://github.com/muyiyr))
+- Fixed native Kitty image rows interrupting hover previews and overlays; image data and placement survive text compositing, and overlapping images temporarily draw below overlay backgrounds
 
 ## [1.4.0] - 2026-10-21
 
@@ -39,9 +42,7 @@
 
 ### Added
 
-- Added an optional `setHoverPreviewDelay()` hook with cancellation while waiting, so extensions can configure pointer-preview timing without duplicating viewport mouse handling
 - Added `renderFakeCursor()`. Components wrap their drawn cursor with it, and the TUI renders it in reverse video, or omits it after `CURSOR_MARKER` when `showHardwareCursor` is enabled
-- Added an opt-in fullscreen conversation timeline with pointer previews and turn navigation, non-capturing hover previews, and the scrollable `PreviewPanel` component
 
 ### Changed
 
@@ -49,7 +50,6 @@
 
 ### Fixed
 
-- Fixed native Kitty image rows interrupting hover previews and overlays; image data and placement survive text compositing, and overlapping images temporarily draw below overlay backgrounds
 - Fixed overlay compositing dropping `CURSOR_MARKER` when an overlay ends directly left of the cursor, which lost the hardware cursor position
 - Fixed focused fullscreen overlays blocking mouse-wheel scrolling of the transcript. Wheel events that no component handles now scroll the transcript instead of reaching the focused overlay's `handleInput` as raw input; overlays that scroll with the wheel must implement `handleMouse` ([#10769](https://github.com/earendil-works/pi/issues/10769))
 - Fixed fragmented terminal color replies leaking hex values into the prompt and triggering the external editor via their BEL terminator (related reports: [#10256](https://github.com/earendil-works/pi/issues/10256), [#10657](https://github.com/earendil-works/pi/issues/10657))

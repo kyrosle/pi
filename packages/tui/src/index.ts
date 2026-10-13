@@ -52,7 +52,6 @@ export { Input } from "./components/input.ts";
 export { Loader, type LoaderIndicatorOptions } from "./components/loader.ts";
 export { type DefaultTextStyle, Markdown, type MarkdownOptions, type MarkdownTheme } from "./components/markdown.ts";
 export { MouseRegion, type MouseRegionHandler } from "./components/mouse-region.ts";
-export { PreviewPanel, type PreviewPanelOptions } from "./components/preview-panel.ts";
 export {
 	ScrollView,
 	type ScrollViewOptions,

@@ -1,7 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-	type CompactToolCallComponent,
 	CustomEditor,
 	type ExtensionAPI,
 	getAgentDir,
@@ -10,11 +9,9 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
-	type Component,
 	Container,
 	type EditorTheme,
 	isViewportTUI,
-	PreviewPanel,
 	SelectList,
 	Spacer,
 	stripTerminalSequences,
@@ -25,6 +22,8 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { PreviewPanel } from "./grok-ui/preview-panel.ts";
+import { grokToolRenderers } from "./grok-ui/tool-renderers.ts";
 
 function isHoverDelay(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 0x7fffffff;
@@ -65,68 +64,6 @@ export class GrokEditor extends CustomEditor {
 		if (event.width < 6) return super.handleMouse(event);
 		if (event.x === 0 || event.x >= event.width - 1) return undefined;
 		return super.handleMouse({ ...event, x: event.x - 1, width: event.width - 2 });
-	}
-}
-
-type ToolStatusContext = {
-	isPartial: boolean;
-	isError: boolean;
-	executionStarted: boolean;
-	expanded: boolean;
-};
-
-class GrokToolTitle implements CompactToolCallComponent {
-	readonly compactToolCall: boolean;
-	readonly content: Component;
-	private theme: Theme;
-	private status: ToolStatusContext;
-	private headerWidth = 0;
-	private hasStatusRow = false;
-	private headerRow = 0;
-
-	constructor(content: Component, theme: Theme, status: ToolStatusContext) {
-		this.compactToolCall = !("compactToolCall" in content && content.compactToolCall === false);
-		this.content = content;
-		this.theme = theme;
-		this.status = status;
-	}
-
-	render(width: number): string[] {
-		const lines = this.content.render(width);
-		if (lines.length === 0) return lines;
-		this.headerRow = lines.findIndex((line) => stripTerminalSequences(line).trim().length > 0);
-		if (this.headerRow < 0) return lines;
-		const { isError, isPartial, executionStarted, expanded } = this.status;
-		const label = isError ? "Failed" : isPartial ? (executionStarted ? "Running" : "Queued") : "Done";
-		const color = isError ? "error" : isPartial ? "muted" : "success";
-		const status = this.theme.fg(color, label);
-		const prefix = this.theme.fg("muted", expanded ? "▾ " : "▸ ");
-		const remaining = width - visibleWidth(prefix) - visibleWidth(status) - 1;
-		this.hasStatusRow = remaining < 4;
-		this.headerWidth = Math.max(0, remaining);
-		if (this.hasStatusRow) return [truncateToWidth(status, width), ...lines];
-		const title = truncateToWidth(lines[this.headerRow], remaining);
-		return [
-			...lines.slice(0, this.headerRow),
-			prefix + title + " ".repeat(width - visibleWidth(prefix + title + status)) + status,
-			...lines.slice(this.headerRow + 1),
-		];
-	}
-
-	invalidate(): void {
-		this.content.invalidate();
-	}
-
-	handleMouse(event: TuiMouseEvent): ReturnType<NonNullable<Component["handleMouse"]>> {
-		if (this.hasStatusRow) {
-			if (event.y === 0) return undefined;
-			return this.content.handleMouse?.({ ...event, y: event.y - 1, height: event.height - 1 });
-		}
-		if (event.y === this.headerRow) {
-			if (event.x < 2 || event.x >= this.headerWidth + 2) return undefined;
-			return this.content.handleMouse?.({ ...event, x: event.x - 2 });
-		}
-		return this.content.handleMouse?.(event);
 	}
 }
 
@@ -217,16 +154,7 @@ export default function grokUi(pi: ExtensionAPI): void {
 	});
 	pi.registerToolRenderer((_name, next) => {
 		const renderers = next();
-		if (!renderers?.renderCall) return renderers;
-		const renderCall = renderers.renderCall;
-		return {
-			...renderers,
-			renderCall(args, theme, context) {
-				const lastComponent =
-					context.lastComponent instanceof GrokToolTitle ? context.lastComponent.content : context.lastComponent;
-				return new GrokToolTitle(renderCall(args, theme, { ...context, lastComponent }), theme, context);
-			},
-		};
+		return renderers ? grokToolRenderers(renderers) : undefined;
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
