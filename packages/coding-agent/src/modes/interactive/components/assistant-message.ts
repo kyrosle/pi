@@ -112,7 +112,12 @@ export class AssistantMessageComponent extends Container {
 				// Set paddingY=0 to avoid extra spacing before tool executions
 				this.contentContainer.addChild(
 					new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
-						transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
+						transform: createMarkdownTransform(
+							"assistant",
+							this.isStreaming,
+							this.markdownTransformers,
+							message.model,
+						),
 					}),
 				);
 			} else if (content.type === "thinking") {
@@ -157,6 +162,7 @@ export class AssistantMessageComponent extends Container {
 									"assistant-thinking",
 									this.isStreaming,
 									this.markdownTransformers,
+									message.model,
 								),
 							},
 						);

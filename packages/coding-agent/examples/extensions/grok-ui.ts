@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import {
 	CustomEditor,
@@ -148,9 +149,20 @@ export default function grokUi(pi: ExtensionAPI): void {
 	let hoverDelayMs = 2000;
 	let settings: Record<string, unknown> = {};
 	const settingsPath = join(getAgentDir(), "grok-ui.json");
-	pi.registerMarkdownTransformer((markdown, { messageType }) => {
+	let username: string | undefined;
+	try {
+		username = userInfo().username;
+	} catch {
+		// userInfo() throws when the uid has no passwd entry (some containers); user headings are skipped then.
+	}
+	pi.registerMarkdownTransformer((markdown, { messageType, model }) => {
 		if (!markdown.trim() || messageType === "assistant-thinking") return markdown;
-		return `**${messageType === "user" ? "你" : "Pi"}**\n\n${markdown}`;
+		const label = messageType === "user" ? username : model;
+		if (!label) return markdown;
+		const title = stripTerminalSequences(label);
+		const fence = "`".repeat((title.match(/`+/g) ?? []).reduce((length, run) => Math.max(length, run.length + 1), 1));
+		const heading = `**${fence} ${title} ${fence}**\n\n`;
+		return markdown.startsWith(heading) ? markdown : heading + markdown;
 	});
 	pi.registerToolRenderer((_name, next) => {
 		const renderers = next();
@@ -252,8 +264,12 @@ export default function grokUi(pi: ExtensionAPI): void {
 				render(width) {
 					configureTimeline();
 					const theme = ctx.ui.theme;
+					const model = ctx.model?.id ?? "No model selected";
 					return [
-						truncateToWidth(theme.fg("text", theme.bold("Pi")) + theme.fg("muted", "  Grok UI prototype"), width),
+						truncateToWidth(
+							theme.fg("text", theme.bold(model)) + theme.fg("muted", "  Grok UI prototype"),
+							width,
+						),
 						truncateToWidth(theme.fg("muted", "Message below. /grok-ui opens display options."), width),
 					];
 				},

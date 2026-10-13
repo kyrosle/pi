@@ -1,5 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import {
@@ -28,7 +28,7 @@ import { AssistantMessageComponent } from "../../src/modes/interactive/component
 import { WorkingStatusIndicator } from "../../src/modes/interactive/components/status-indicator.ts";
 import { ToolExecutionComponent } from "../../src/modes/interactive/components/tool-execution.ts";
 import { UserMessageComponent } from "../../src/modes/interactive/components/user-message.ts";
-import { initTheme, loadThemeFromPath, theme } from "../../src/modes/interactive/theme/theme.ts";
+import { initTheme, loadThemeFromPath, setThemeInstance, theme } from "../../src/modes/interactive/theme/theme.ts";
 import { createInteractiveTuiReference } from "../../src/modes/interactive/tui-renderer.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
 import { createHarness, createTestUiContext, getToolResult, getUserTexts, type Harness } from "./harness.ts";
@@ -189,10 +189,11 @@ describe("Grok extension compatibility", () => {
 		});
 	});
 
-	it("labels rendered roles without labeling thinking or duplicating a streamed reply header", async () => {
+	it("labels messages with the system username and recorded model without changing their content", async () => {
 		const harness = await createHarness({ extensionFactories: [grokUi] });
 		harnesses.push(harness);
 		const transformers = harness.session.extensionRunner.getMarkdownTransformers();
+		const username = userInfo().username;
 		const userText = "检查文件 🌍";
 		const user = new UserMessageComponent(userText, undefined, 1, transformers);
 		const message = fauxAssistantMessage([
@@ -205,8 +206,10 @@ describe("Grok extension compatibility", () => {
 			const assistantLines = assistant.render(width);
 			expect(userLines.every((line) => visibleWidth(line) <= width)).toBe(true);
 			expect(assistantLines.every((line) => visibleWidth(line) <= width)).toBe(true);
-			expect(userLines.map((line) => stripAnsi(line).trim()).filter((line) => line === "你")).toHaveLength(1);
-			expect(assistantLines.map((line) => stripAnsi(line).trim()).filter((line) => line === "Pi")).toHaveLength(1);
+			expect(userLines.map((line) => stripAnsi(line).trim()).filter((line) => line === username)).toHaveLength(1);
+			expect(
+				assistantLines.map((line) => stripAnsi(line).trim()).filter((line) => line === message.model),
+			).toHaveLength(1);
 		}
 		assistant.updateContent(fauxAssistantMessage("检查完成 🌍，继续处理。"), true);
 		for (const width of [40, 80]) {
@@ -214,7 +217,7 @@ describe("Grok extension compatibility", () => {
 				assistant
 					.render(width)
 					.map((line) => stripAnsi(line).trim())
-					.filter((line) => line === "Pi"),
+					.filter((line) => line === message.model),
 			).toHaveLength(1);
 		}
 		expect(message.content).toEqual([
@@ -222,6 +225,64 @@ describe("Grok extension compatibility", () => {
 			{ type: "text", text: "检查完成 🌍" },
 		]);
 		expect(transformers[0]?.("", { messageType: "assistant", isStreaming: true, availableWidth: 80 })).toBe("");
+	});
+
+	it("keeps one heading with duplicate Grok extensions across dark and Grok themes and model changes", async () => {
+		const harness = await createHarness({ extensionFactories: [grokUi, grokUi] });
+		harnesses.push(harness);
+		const transformers = harness.session.extensionRunner.getMarkdownTransformers();
+		expect(transformers).toHaveLength(2);
+		const username = userInfo().username;
+		const userText = "检查当前pi版本";
+		const user = new UserMessageComponent(userText, undefined, 1, transformers);
+		const firstMessage = { ...fauxAssistantMessage("first answer"), model: "gpt-6-sol" };
+		const secondMessage = { ...fauxAssistantMessage("second answer"), model: "claude-sonnet" };
+		const first = new AssistantMessageComponent(firstMessage, false, undefined, "Thinking...", 1, transformers);
+		const second = new AssistantMessageComponent(secondMessage, false, undefined, "Thinking...", 1, transformers);
+		for (const palette of ["dark", "grok", "dark"]) {
+			if (palette === "grok") {
+				setThemeInstance(loadThemeFromPath(join(import.meta.dirname, "../../../../.pi/themes/grok.json")));
+			} else {
+				initTheme(palette);
+			}
+			for (const [component, label] of [
+				[user, username],
+				[first, firstMessage.model],
+				[second, secondMessage.model],
+			] as const) {
+				component.invalidate();
+				const lines = component.render(80).map((line) => stripAnsi(line).trim());
+				expect(lines.filter((line) => line === label)).toHaveLength(1);
+				expect(lines).not.toContain("你");
+				expect(lines).not.toContain("Pi");
+			}
+		}
+		expect(stripAnsi(first.render(80).join("\n"))).not.toContain(secondMessage.model);
+		expect(firstMessage.content).toEqual([{ type: "text", text: "first answer" }]);
+		expect(harness.faux.state.callCount).toBe(0);
+		expect(getUserTexts(harness)).toEqual([]);
+	});
+
+	it("escapes Markdown in model headings and leaves thinking and unavailable model names alone", async () => {
+		const harness = await createHarness({ extensionFactories: [grokUi] });
+		harnesses.push(harness);
+		const transformers = harness.session.extensionRunner.getMarkdownTransformers();
+		for (const model of ["model_*[test]", "model`test", "model``test", "model\\[test\\]"]) {
+			const message = { ...fauxAssistantMessage("answer"), model };
+			const assistant = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, transformers);
+			expect(assistant.render(80).map((line) => stripAnsi(line).trim())).toContain(model);
+		}
+		expect(
+			transformers[0]?.("reasoning", {
+				messageType: "assistant-thinking",
+				isStreaming: false,
+				availableWidth: 80,
+				model: "gpt-6-sol",
+			}),
+		).toBe("reasoning");
+		expect(transformers[0]?.("answer", { messageType: "assistant", isStreaming: false, availableWidth: 80 })).toBe(
+			"answer",
+		);
 	});
 
 	it("preserves model, tool definitions and prompt through startup and actual write/edit turns", async () => {
