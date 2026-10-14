@@ -5,12 +5,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { activateSourceInstall, checkSourceInstall, sourceInstallPaths, uninstallSourceInstall } from "./source-install.mjs";
+import { createJiti } from "jiti";
+import { activateSourceInstall, checkSourceInstall, sourceInstallPaths, uninstallSourceInstall, writeSourceGrokEntry } from "./source-install.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 function fixture(t) {
-	const home = mkdtempSync(join(tmpdir(), "pi source 'install-"));
+	const home = mkdtempSync(join(tmpdir(), "pi source '#?install-"));
 	t.after(() => rmSync(home, { recursive: true, force: true }));
 	const paths = sourceInstallPaths(home, join(home, ".pi", "agent"));
 	return { home, paths };
@@ -25,15 +26,30 @@ function snapshot(paths, marker) {
 	mkdirSync(paths.root, { recursive: true });
 	const directory = mkdtempSync(join(paths.root, "install-"));
 	write(join(directory, "pi"), `#!/bin/sh\nprintf '%s\\n' '${marker}' "$@"\n`, 0o755);
-	write(join(directory, "grok-ui.js"), 'export { default } from "./grok-ui.ts";\n');
-	write(join(directory, "grok-ui.ts"), 'import { PreviewPanel } from "./grok-ui/preview-panel.ts";\nexport default new PreviewPanel();\n');
-	write(join(directory, "grok-ui", "preview-panel.ts"), `export class PreviewPanel { constructor() { console.log(${JSON.stringify(marker)}); } }\n`);
+	const extensions = join(directory, "node_modules", "@earendil-works", "pi-coding-agent", "examples", "extensions");
+	writeSourceGrokEntry(directory);
+	write(join(extensions, "grok-ui.ts"), 'import { PreviewPanel } from "./grok-ui/preview-panel.ts";\nexport default new PreviewPanel();\n');
+	write(join(extensions, "grok-ui", "preview-panel.ts"), `export class PreviewPanel { constructor() { this.marker = ${JSON.stringify(marker)}; console.log(this.marker); } }\n`);
 	write(join(directory, "grok.json"), JSON.stringify({ name: "grok", marker }));
 	write(join(directory, "package.json"), '{"type":"module"}\n');
 	return directory;
 }
 
-test("installs coherent UI links, updates snapshots, and restores legacy files without touching user data", (t) => {
+test("Jiti loads the installed Grok entry through user-directory symlinks", async (t) => {
+	const { home, paths } = fixture(t);
+	write(join(home, ".tpi", "agent", "extensions", "grok-ui.js"), "old copy");
+	activateSourceInstall(paths, snapshot(paths, "linked preview"));
+	for (const alias of [
+		join(paths.agentDirectory, "extensions", "grok-ui.ts"),
+		join(home, ".tpi", "agent", "extensions", "grok-ui.js"),
+	]) {
+		const jiti = createJiti(import.meta.url, { moduleCache: false, fsCache: false, tryNative: false });
+		const preview = await jiti.import(alias, { default: true });
+		assert.equal(preview.marker, "linked preview");
+	}
+});
+
+test("installs coherent UI links, updates snapshots, and restores legacy files without touching user data", async (t) => {
 	const { home, paths } = fixture(t);
 	const oldTs = join(paths.agentDirectory, "extensions", "grok-ui.ts");
 	const oldJs = join(paths.agentDirectory, "extensions", "grok-ui.js");
@@ -52,12 +68,13 @@ test("installs coherent UI links, updates snapshots, and restores legacy files w
 	assert.equal(execFileSync(paths.launcher, ["argument with spaces"], { encoding: "utf8" }), "first\nargument with spaces\n");
 	assert.equal(realpathSync(oldTs), realpathSync(oldJs));
 	assert.equal(realpathSync(legacy), realpathSync(oldTs));
-	assert.equal(execFileSync(process.execPath, [oldTs], { encoding: "utf8" }).trim(), "first");
+	const jiti = createJiti(import.meta.url, { moduleCache: false, fsCache: false, tryNative: false });
+	assert.equal((await jiti.import(oldTs, { default: true })).marker, "first");
 	checkSourceInstall(paths);
 	const second = snapshot(paths, "second");
 	activateSourceInstall(paths, second);
 	assert.equal(readlinkSync(paths.current), second);
-	assert.equal(execFileSync(process.execPath, [oldTs], { encoding: "utf8" }).trim(), "second");
+	assert.equal((await jiti.import(oldTs, { default: true })).marker, "second");
 	assert.equal(JSON.parse(readFileSync(oldTheme, "utf8")).marker, "second");
 	const state = JSON.parse(readFileSync(paths.state, "utf8"));
 	assert.equal(readFileSync(state.links.find((link) => link.path === oldTs).backup, "utf8"), "old extension");
