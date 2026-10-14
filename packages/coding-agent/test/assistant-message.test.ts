@@ -3,7 +3,7 @@ import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { getMarkdownTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -278,5 +278,137 @@ describe("AssistantMessageComponent", () => {
 		const unpaddedComponent = new UserMessageComponent("hello", undefined, 0);
 		const unpaddedLines = unpaddedComponent.render(40).map((line) => stripAnsi(line));
 		expect(unpaddedLines.some((line) => line.startsWith("hello"))).toBe(true);
+	});
+
+	test("streamed updates render the same lines as a fresh component", () => {
+		initTheme("dark");
+		const steps: AssistantMessage["content"][] = [
+			[{ type: "text", text: "Intro" }],
+			[{ type: "text", text: "Intro\n\n```ts\nconst a = 1;\n```" }],
+			[{ type: "text", text: "Intro\n\n```ts\nconst a = 1;\n```\n\nTail words" }],
+			[
+				{ type: "thinking", thinking: "Reasoning" },
+				{ type: "text", text: "Intro\n\n```ts\nconst a = 1;\n```\n\nTail words here" },
+			],
+			[
+				{ type: "thinking", thinking: "Reasoning more" },
+				{ type: "text", text: "Changed\n\n```ts\nconst a = 1;\n```\n\nTail words here" },
+			],
+			[
+				{ type: "thinking", thinking: "Reasoning more" },
+				{ type: "text", text: "Changed\n\n```ts\nconst a = 1;\n```\n\nTail words here" },
+			],
+		];
+
+		const streaming = new AssistantMessageComponent();
+		for (const content of steps) {
+			streaming.updateContent(createAssistantMessage(content), true);
+			const fresh = new AssistantMessageComponent();
+			fresh.updateContent(createAssistantMessage(content), true);
+			expect(streaming.render(60)).toEqual(fresh.render(60));
+		}
+	});
+
+	test("keeps completed code layouts while text streams and when the stream ends", () => {
+		initTheme("dark");
+		let highlightCalls = 0;
+		const markdownTheme = {
+			...getMarkdownTheme(),
+			highlightCode: (code: string) => {
+				highlightCalls++;
+				return code.split("\n");
+			},
+		};
+		const component = new AssistantMessageComponent(undefined, false, markdownTheme);
+
+		component.updateContent(
+			createAssistantMessage([{ type: "text", text: "```ts\nconst a = 1;\n```\n\nFirst" }]),
+			true,
+		);
+		component.render(80);
+		expect(highlightCalls).toBe(1);
+
+		component.updateContent(
+			createAssistantMessage([{ type: "text", text: "```ts\nconst a = 1;\n```\n\nFirst paragraph grows" }]),
+			true,
+		);
+		component.render(80);
+		expect(highlightCalls).toBe(1);
+
+		component.updateContent(
+			createAssistantMessage([{ type: "text", text: "```ts\nconst a = 1;\n```\n\nFirst paragraph grows" }]),
+			false,
+		);
+		component.render(80);
+		expect(highlightCalls).toBe(1);
+		component.invalidate();
+		component.render(80);
+		expect(highlightCalls).toBe(2);
+	});
+
+	test("runs final transformers when streaming ends without new text", () => {
+		initTheme("dark");
+		const message = createAssistantMessage([{ type: "text", text: "answer" }]);
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, [
+			(markdown, { isStreaming }) => (isStreaming ? markdown : `final:${markdown}`),
+		]);
+
+		component.updateContent(message, true);
+		expect(stripAnsi(component.render(80).join("\n"))).not.toContain("final:");
+
+		component.updateContent(message, false);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("final:answer");
+	});
+
+	test("invalidate re-renders content after external theme state changes", () => {
+		initTheme("dark");
+		let headingPrefix = "A";
+		const markdownTheme = {
+			...getMarkdownTheme(),
+			heading: (text: string) => `${headingPrefix}${text}`,
+		};
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "text", text: "# Title" }]),
+			false,
+			markdownTheme,
+		);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("ATitle");
+
+		headingPrefix = "B";
+		component.invalidate();
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("BTitle");
+	});
+
+	test.each(["stop", "aborted", "error", "length"] as const)(
+		"matches a fresh component after a streamed %s and repeated renders",
+		(stopReason) => {
+			initTheme("dark");
+			const message = createAssistantMessage([{ type: "text", text: "```ts\nconst a = 1;\n```\n\nPartial" }]);
+			const component = new AssistantMessageComponent();
+			component.updateContent(message, true);
+			component.render(60);
+			message.stopReason = stopReason;
+			message.errorMessage = "fixture error";
+			component.updateContent(message, false);
+			const expected = new AssistantMessageComponent(message).render(60);
+			expect(component.render(60)).toEqual(expected);
+			expect(component.render(60)).toEqual(expected);
+		},
+	);
+
+	test("refreshes model context and reruns transforms for identical text", () => {
+		initTheme("dark");
+		let revision = 0;
+		const message = createAssistantMessage([{ type: "text", text: "answer" }]);
+		const component = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, [
+			(text, { model }) => `${model}:${revision}:${text}`,
+		]);
+		component.render(60);
+		revision++;
+		component.updateContent(message, true);
+		expect(stripAnsi(component.render(60).join("\n"))).toContain("gpt-4o-mini:1:answer");
+		message.model = "fixture-model";
+		component.updateContent(message, true);
+		expect(stripAnsi(component.render(60).join("\n"))).toContain("fixture-model:1:answer");
 	});
 });

@@ -1862,4 +1862,155 @@ bar`,
 			assert.strictEqual(partial.render(80).length, complete.render(80).length);
 		});
 	});
+
+	describe("Block cache", () => {
+		afterEach(() => {
+			resetCapabilitiesCache();
+		});
+
+		// A new component has no cached state, so its output is the reference for a cached one.
+		function freshLines(text: string, width: number, theme: MarkdownTheme = defaultMarkdownTheme): string[] {
+			return new Markdown(text, 0, 0, theme).render(width);
+		}
+
+		it("matches a fresh render at every streaming prefix and after a width change", () => {
+			const source = [
+				"# Streaming",
+				"",
+				"Paragraph with **bold**, `code`, and [a link](https://example.com/a) plus 中文字符与宽字符。",
+				"",
+				"- first item with a longer body that needs wrapping across the column boundary",
+				"- second item",
+				"",
+				"> quoted text that also wraps around the block width limit for testing",
+				"",
+				"```ts",
+				"const value = compute(1);",
+				"```",
+				"",
+				"| a | b |",
+				"| - | - |",
+				"| 1 | 2 |",
+				"",
+				"Closing paragraph.",
+			].join("\n");
+
+			const markdown = new Markdown("", 0, 0, defaultMarkdownTheme);
+			for (let end = 0; end <= source.length; end += 3) {
+				const prefix = source.slice(0, end);
+				markdown.setText(prefix);
+				assert.deepStrictEqual(markdown.render(40), freshLines(prefix, 40), `prefix length ${end}`);
+			}
+			markdown.setText(source);
+			assert.deepStrictEqual(markdown.render(40), freshLines(source, 40));
+			assert.deepStrictEqual(markdown.render(25), freshLines(source, 25));
+			assert.deepStrictEqual(markdown.render(40), freshLines(source, 40));
+		});
+
+		it("matches a fresh render at every code unit of a short mixed fixture", () => {
+			const fixture = "中文 😀 `a` **b**\n\n- x\n\n```ts\nq\n```\n\n> tail";
+
+			const markdown = new Markdown("", 0, 0, defaultMarkdownTheme);
+			for (let end = 0; end <= fixture.length; end++) {
+				const prefix = fixture.slice(0, end);
+				markdown.setText(prefix);
+				assert.deepStrictEqual(markdown.render(30), freshLines(prefix, 30), `prefix length ${end}`);
+			}
+		});
+
+		it("re-renders earlier paragraphs when a later link definition arrives", () => {
+			setCapabilities({ images: null, trueColor: false, hyperlinks: false });
+			const markdown = new Markdown("See [guide][target].", 0, 0, defaultMarkdownTheme);
+			const before = markdown.render(80).map(stripAnsi).join("\n");
+
+			const withDefinition = "See [guide][target].\n\n[target]: https://example.com/guide";
+			markdown.setText(withDefinition);
+			const after = markdown.render(80);
+
+			assert.ok(!before.includes("https://example.com/guide"));
+			assert.ok(after.map(stripAnsi).join("\n").includes("https://example.com/guide"));
+			assert.deepStrictEqual(after, freshLines(withDefinition, 80));
+		});
+
+		it("re-renders blocks when hyperlink support changes without a text change", () => {
+			const text = "A [link](https://example.com) here.";
+			setCapabilities({ images: null, trueColor: false, hyperlinks: false });
+			const markdown = new Markdown(text, 0, 0, defaultMarkdownTheme);
+			markdown.render(80);
+
+			setCapabilities({ images: null, trueColor: false, hyperlinks: true });
+			markdown.setText(text);
+			assert.deepStrictEqual(markdown.render(80), freshLines(text, 80));
+		});
+
+		it("does not re-highlight a completed code block when later text is appended", () => {
+			let highlightCalls = 0;
+			const theme: MarkdownTheme = {
+				...defaultMarkdownTheme,
+				highlightCode: (code: string) => {
+					highlightCalls++;
+					return code.split("\n");
+				},
+			};
+			const markdown = new Markdown("```ts\nconst a = 1;\n```\n\nFirst", 0, 0, theme);
+			markdown.render(80);
+			assert.strictEqual(highlightCalls, 1);
+
+			markdown.setText("```ts\nconst a = 1;\n```\n\nFirst paragraph grows");
+			markdown.render(80);
+			assert.strictEqual(highlightCalls, 1);
+		});
+
+		it("re-renders cached blocks after invalidate() picks up external theme state", () => {
+			let headingPrefix = "A";
+			const theme: MarkdownTheme = {
+				...defaultMarkdownTheme,
+				heading: (text: string) => `${headingPrefix}${text}`,
+			};
+			const markdown = new Markdown("# Title\n\nBody", 0, 0, theme);
+			assert.ok(stripAnsi(markdown.render(80)[0]).startsWith("A"));
+
+			headingPrefix = "B";
+			markdown.invalidate();
+			assert.ok(stripAnsi(markdown.render(80)[0]).startsWith("B"));
+		});
+
+		it("matches a fresh render when the document has more blocks than the cache keeps", () => {
+			const blocks = Array.from({ length: 2100 }, (_, index) => `Paragraph ${index}.\n\n`);
+			const source = blocks.join("");
+			const markdown = new Markdown(source, 0, 0, defaultMarkdownTheme);
+			markdown.render(60);
+
+			markdown.setText(`${source}Appended tail.`);
+			assert.deepStrictEqual(markdown.render(60), freshLines(`${source}Appended tail.`, 60));
+		});
+
+		it("does not retain a code block exceeding the cache byte budget", () => {
+			let calls = 0;
+			const theme = {
+				...defaultMarkdownTheme,
+				highlightCode: () => {
+					calls++;
+					return ["output"];
+				},
+			};
+			const source = `\`\`\`txt\n${"x".repeat(600_000)}\n\`\`\`\n\nTail`;
+			const markdown = new Markdown(source, 0, 0, theme);
+			markdown.render(60);
+			markdown.setText(`${source} grows`);
+			markdown.render(60);
+			assert.strictEqual(calls, 2);
+		});
+
+		it("refreshes the default style prefix on explicit invalidation", () => {
+			let color = "\x1b[31m";
+			const style = { color: (text: string) => `${color}${text}\x1b[39m` };
+			const text = "**bold** then plain 中文";
+			const markdown = new Markdown(text, 1, 1, defaultMarkdownTheme, style);
+			markdown.render(40);
+			color = "\x1b[32m";
+			markdown.invalidate();
+			assert.deepStrictEqual(markdown.render(40), new Markdown(text, 1, 1, defaultMarkdownTheme, style).render(40));
+		});
+	});
 });
