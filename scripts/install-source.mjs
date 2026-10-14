@@ -1,11 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { codingAgentName, smokeTestCodingAgent } from "./coding-agent-smoke.mjs";
 import { installConsumer, smokeTestNpmConsumer } from "./local-package-install.mjs";
 import { produceArtifactSet } from "./package-artifacts.mjs";
-import { activateSourceInstall, checkSourceInstall, sourceInstallPaths } from "./source-install.mjs";
+import { activateSourceInstall, checkSourceInstall, sourceInstallPaths, writeSourceGrokEntry } from "./source-install.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const paths = sourceInstallPaths();
@@ -20,10 +21,12 @@ try {
 	smokeTestCodingAgent(directory);
 	const packageDirectory = join(directory, "node_modules", codingAgentName);
 	cpSync(join(repoRoot, ".pi", "themes", "grok.json"), join(directory, "grok.json"));
-	writeFileSync(join(directory, "grok-ui.js"), `export { default } from "./node_modules/${codingAgentName}/examples/extensions/grok-ui.ts";\n`);
-	const smokeHome = mkdtempSync(join(directory, "smoke-home-"));
+	writeSourceGrokEntry(directory);
+	const smokeHome = mkdtempSync(join(tmpdir(), "pi-source-grok-smoke-"));
 	const smokePath = join(directory, "grok-smoke.mjs");
 	try {
+		mkdirSync(join(smokeHome, "extensions"));
+		symlinkSync(join(directory, "grok-ui.js"), join(smokeHome, "extensions", "grok-ui.js"));
 		cpSync(join(repoRoot, "scripts", "source-install-smoke.mjs"), smokePath);
 		execFileSync(process.execPath, [smokePath], { cwd: directory, stdio: "inherit", timeout: 30_000,
 			env: { ...process.env, PI_CODING_AGENT_DIR: smokeHome, PI_OFFLINE: "1", PI_TELEMETRY: "0" },

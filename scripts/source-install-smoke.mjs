@@ -6,8 +6,8 @@ import { TuiAltScreen } from "@earendil-works/pi-tui";
 import { createJiti } from "jiti";
 
 initTheme("dark");
-const jiti = createJiti(import.meta.url, { moduleCache: false });
-const grokUi = await jiti.import(join(process.cwd(), "grok-ui.js"), { default: true });
+const jiti = createJiti(import.meta.url, { moduleCache: false, tryNative: false });
+const grokUi = await jiti.import(join(process.env.PI_CODING_AGENT_DIR, "extensions", "grok-ui.js"), { default: true });
 let start;
 grokUi({
 	registerMarkdownTransformer() {},

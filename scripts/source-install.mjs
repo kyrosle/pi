@@ -14,7 +14,13 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+export function writeSourceGrokEntry(directory) {
+	// Jiti resolves imports relative to the user-directory symlink, not its target.
+	const extension = pathToFileURL(join(directory, "node_modules", "@earendil-works", "pi-coding-agent", "examples", "extensions", "grok-ui.ts"));
+	writeFileSync(join(directory, "grok-ui.js"), `export { default } from ${JSON.stringify(extension.href)};\n`);
+}
 
 export function sourceInstallPaths(homeDirectory = homedir(), agentDirectory = process.env.PI_CODING_AGENT_DIR) {
 	const root = join(homeDirectory, ".local", "share", "pi-source");
