@@ -2,19 +2,26 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	type Component,
 	Container,
+	type DefaultTextStyle,
 	Markdown,
 	type MarkdownTheme,
 	MouseRegion,
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
-import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
+import type { MarkdownTransformContext, MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+
+/** A Markdown component kept for one content position, with the settings its transform captured. */
+interface MarkdownRecord {
+	config: string;
+	markdown: Markdown;
+}
 
 /**
  * Component that renders a complete assistant message
@@ -32,6 +39,8 @@ export class AssistantMessageComponent extends Container {
 	private messageId?: string;
 	private timestamp?: string;
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
+	// Keyed by content position, so a streamed update reuses the Markdown (and its block cache) instead of rebuilding it.
+	private markdownRecords = new Map<string, MarkdownRecord>();
 
 	constructor(
 		message?: AssistantMessage,
@@ -64,6 +73,8 @@ export class AssistantMessageComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		// Theme and highlighter state may have changed, so rebuild every Markdown instead of reusing it.
+		this.markdownRecords.clear();
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -108,6 +119,8 @@ export class AssistantMessageComponent extends Container {
 
 		// Clear content container
 		this.contentContainer.clear();
+		const previousRecords = this.markdownRecords;
+		this.markdownRecords = new Map();
 
 		// Spacers are added lazily, right before the next visible content block. This puts a blank
 		// line before the first visible block and after each visible thinking run that is followed
@@ -129,18 +142,10 @@ export class AssistantMessageComponent extends Container {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
 				addVisibleChild(
-					new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
-						transform: createMarkdownTransform(
-							"assistant",
-							this.isStreaming,
-							this.markdownTransformers,
-							this.messageId,
-							this.timestamp,
-							message.model,
-						),
-					}),
+					this.acquireMarkdown(previousRecords, `text:${i}`, content.text.trim(), "assistant", message.model),
 				);
 			} else if (content.type === "thinking") {
+				const runStart = i;
 				const thinkingBlocks: string[] = [];
 				for (; i < message.content.length; i++) {
 					const thinkingContent = message.content[i];
@@ -166,24 +171,15 @@ export class AssistantMessageComponent extends Container {
 				}
 				const thinkingComponent = hidden
 					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
-					: new Markdown(
+					: this.acquireMarkdown(
+							previousRecords,
+							`thinking:${runStart}`,
 							thinkingBlocks.join("\n\n"),
-							this.outputPad,
-							0,
-							this.markdownTheme,
+							"assistant-thinking",
+							message.model,
 							{
 								color: (text: string) => theme.fg("thinkingText", text),
 								italic: true,
-							},
-							{
-								transform: createMarkdownTransform(
-									"assistant-thinking",
-									this.isStreaming,
-									this.markdownTransformers,
-									this.messageId,
-									this.timestamp,
-									message.model,
-								),
 							},
 						);
 				addVisibleChild(
@@ -224,5 +220,38 @@ export class AssistantMessageComponent extends Container {
 				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
 			}
 		}
+	}
+
+	private acquireMarkdown(
+		previousRecords: ReadonlyMap<string, MarkdownRecord>,
+		key: string,
+		text: string,
+		messageType: MarkdownTransformContext["messageType"],
+		model: string | undefined,
+		defaultTextStyle?: DefaultTextStyle,
+	): Markdown {
+		const config = JSON.stringify([messageType, model ?? null, this.outputPad]);
+		const record = previousRecords.get(key);
+		let markdown: Markdown;
+		if (record?.config === config) {
+			markdown = record.markdown;
+			// setText always clears the full-output cache, so the transform runs again even for identical text.
+			markdown.setText(text);
+		} else {
+			markdown = new Markdown(text, this.outputPad, 0, this.markdownTheme, defaultTextStyle, {
+				// Ending a stream must rerun transformers without discarding unchanged block layouts.
+				transform: (source, width) =>
+					createMarkdownTransform(
+						messageType,
+						this.isStreaming,
+						this.markdownTransformers,
+						this.messageId,
+						this.timestamp,
+						model,
+					)(source, width),
+			});
+		}
+		this.markdownRecords.set(key, { config, markdown });
+		return markdown;
 	}
 }

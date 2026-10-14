@@ -10,6 +10,10 @@
 - Added an optional `setHoverPreviewDelay()` hook with cancellation while waiting, so extensions can configure pointer-preview timing without duplicating viewport mouse handling
 - Added an opt-in fullscreen conversation timeline with pointer previews and turn navigation, and non-capturing hover previews; the Grok extension owns its scrollable preview component
 
+### Changed
+
+- Changed `Markdown` to reuse the rendered lines of unchanged top-level blocks across `setText()` updates, so streaming a long response re-wraps only the blocks that changed; `invalidate()` still rebuilds everything. Increased the bounded non-ASCII width cache to avoid slower resize after streaming
+
 ### Fixed
 
 - Fixed fullscreen double-click selection splitting paths and tokens at `~`, `.`, `\`, and `+`. Word characters now match iTerm2's defaults ([#10980](https://github.com/earendil-works/pi/issues/10980))

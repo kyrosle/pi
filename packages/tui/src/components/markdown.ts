@@ -206,6 +206,69 @@ markdownParser.use({
 	extensions: [...LATEX_MARKDOWN_EXTENSIONS],
 });
 
+// Limits for one component's block cache; the payload estimate includes nested token data.
+const BLOCK_CACHE_MAX_RECORDS = 4096;
+const BLOCK_CACHE_MAX_BYTES = 1024 * 1024;
+
+interface BlockRecord {
+	/** Render inputs of the block: its token, the type of the token after it, and hyperlink support. */
+	token: Token;
+	nextTokenType: string | undefined;
+	hyperlinks: boolean;
+	/** Final output lines. Shared with the component's full output array, so they must not be mutated. */
+	lines: string[];
+	bytes: number;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	const prototype = Object.getPrototypeOf(value);
+	return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * Exact equality for token data made of plain objects, arrays, and primitives. Any other value compares unequal, so an
+ * unknown token shape is rendered again rather than reused. Compares in place without building a serialized copy: a
+ * growing block usually differs in its first field, such as raw length, so the comparison stops almost immediately.
+ */
+function isSameTokenData(left: unknown, right: unknown): boolean {
+	if (Object.is(left, right)) {
+		return true;
+	}
+	if (Array.isArray(left) || Array.isArray(right)) {
+		if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+			return false;
+		}
+		return left.every((item, index) => isSameTokenData(item, right[index]));
+	}
+	if (!isPlainObject(left) || !isPlainObject(right)) {
+		return false;
+	}
+	const keys = Object.keys(left);
+	return (
+		keys.length === Object.keys(right).length &&
+		keys.every((key) => key in right && isSameTokenData(left[key], right[key]))
+	);
+}
+
+/** Logical payload including nested token data; shared strings are counted twice, not measured as V8 heap. */
+function estimateTokenBytes(value: unknown): number {
+	if (typeof value === "string") return value.length * 2;
+	if (Array.isArray(value)) {
+		let bytes = value.length * 8;
+		for (const item of value) bytes += estimateTokenBytes(item);
+		return bytes;
+	}
+	if (isPlainObject(value)) {
+		let bytes = 32;
+		for (const key of Object.keys(value)) bytes += key.length * 2 + 8 + estimateTokenBytes(value[key]);
+		return bytes;
+	}
+	return 8;
+}
+
 /**
  * Default text styling for markdown content.
  * Applied to all text unless overridden by markdown formatting.
@@ -282,6 +345,9 @@ export class Markdown implements Component {
 	// about ten times the size of its source, and every message of a long transcript keeps a Markdown component. The
 	// tokens survive a burst of re-renders, such as a theme preview, and are collected afterwards.
 	private cachedTokens?: WeakRef<{ source: string; tokens: Token[] }>;
+	// Final lines of each top-level block from the latest render, by position. Like the token cache, held weakly:
+	// a collected record only costs a re-render of that block. Cleared by invalidate(), not by setText().
+	private cachedBlocks?: { width: number; records: Array<WeakRef<BlockRecord> | undefined> };
 
 	constructor(
 		text: string,
@@ -301,13 +367,18 @@ export class Markdown implements Component {
 
 	setText(text: string): void {
 		this.text = text;
-		this.invalidate();
+		// Block records survive: the next render checks each block's identity before reusing it.
+		this.cachedText = undefined;
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
 	}
 
 	invalidate(): void {
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
+		this.cachedBlocks = undefined;
+		this.defaultStylePrefix = undefined;
 	}
 
 	render(width: number): string[] {
@@ -323,6 +394,7 @@ export class Markdown implements Component {
 		// Don't render anything if there's no actual text
 		if (!text || text.trim() === "") {
 			const result: string[] = [];
+			this.cachedBlocks = undefined;
 			// Update cache
 			this.cachedText = this.text;
 			this.cachedWidth = width;
@@ -342,53 +414,46 @@ export class Markdown implements Component {
 			this.cachedTokens = new WeakRef({ source: normalizedText, tokens });
 		}
 
-		// Convert tokens to styled terminal output
-		const renderedLines: string[] = [];
+		// Render each top-level block to its final lines. A previous block is reused only when the position and identity match.
+		const hyperlinks = getCapabilities().hyperlinks;
+		const previousRecords = this.cachedBlocks?.width === width ? this.cachedBlocks.records : undefined;
+		const blockRecords: Array<WeakRef<BlockRecord> | undefined> = [];
+		const contentLines: string[] = [];
+		const bgFn = this.defaultTextStyle?.bgColor;
+		let budget = BLOCK_CACHE_MAX_BYTES;
 
 		for (let i = 0; i < tokens.length; i++) {
 			const token = tokens[i];
-			const nextToken = tokens[i + 1];
-			const tokenLines = this.renderToken(token, contentWidth, nextToken?.type);
-			for (const tokenLine of tokenLines) {
-				renderedLines.push(tokenLine);
-			}
-		}
-
-		// Wrap lines (NO padding, NO background yet)
-		const wrappedLines: string[] = [];
-		for (const line of renderedLines) {
-			if (isImageLine(line)) {
-				wrappedLines.push(line);
+			const nextTokenType = tokens[i + 1]?.type;
+			const previousRef = previousRecords?.[i];
+			const previous = previousRef?.deref();
+			let block: BlockRecord;
+			if (
+				previous !== undefined &&
+				previous.nextTokenType === nextTokenType &&
+				previous.hyperlinks === hyperlinks &&
+				isSameTokenData(previous.token, token)
+			) {
+				block = previous;
 			} else {
-				for (const wrappedLine of wrapTextWithAnsi(line, contentWidth)) {
-					wrappedLines.push(wrappedLine);
-				}
+				const lines = this.renderBlockLines(token, nextTokenType, contentWidth, width);
+				let bytes = estimateTokenBytes(token) + lines.length * 8 + 32;
+				for (const line of lines) bytes += line.length * 2;
+				block = { token, nextTokenType, hyperlinks, lines, bytes };
 			}
-		}
-
-		// Add margins and background to each wrapped line
-		const leftMargin = " ".repeat(this.paddingX);
-		const rightMargin = " ".repeat(this.paddingX);
-		const bgFn = this.defaultTextStyle?.bgColor;
-		const contentLines: string[] = [];
-
-		for (const line of wrappedLines) {
-			if (isImageLine(line)) {
+			for (const line of block.lines) {
 				contentLines.push(line);
-				continue;
 			}
 
-			const lineWithMargins = leftMargin + line + rightMargin;
-
-			if (bgFn) {
-				contentLines.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
+			// Blocks beyond the budget are rendered every time but not kept, so the cache never evicts in a loop.
+			if (i < BLOCK_CACHE_MAX_RECORDS && block.bytes <= budget) {
+				budget -= block.bytes;
+				blockRecords.push(block === previous ? previousRef : new WeakRef(block));
 			} else {
-				// No background - just pad to width
-				const visibleLen = visibleWidth(lineWithMargins);
-				const paddingNeeded = Math.max(0, width - visibleLen);
-				contentLines.push(lineWithMargins + " ".repeat(paddingNeeded));
+				budget = 0;
 			}
 		}
+		this.cachedBlocks = { width, records: blockRecords };
 
 		// Add top/bottom padding (empty lines)
 		const emptyLine = " ".repeat(width);
@@ -408,6 +473,56 @@ export class Markdown implements Component {
 		this.cachedLines = result;
 
 		return result.length > 0 ? result : [""];
+	}
+
+	/**
+	 * Renders one top-level token to padded output lines. Wrapping, margins, and background are per line, so the
+	 * result for a block does not depend on other blocks and can be cached on its own.
+	 */
+	private renderBlockLines(
+		token: Token,
+		nextTokenType: string | undefined,
+		contentWidth: number,
+		width: number,
+	): string[] {
+		const renderedLines = this.renderToken(token, contentWidth, nextTokenType);
+
+		// Wrap lines (NO padding, NO background yet)
+		const wrappedLines: string[] = [];
+		for (const line of renderedLines) {
+			if (isImageLine(line)) {
+				wrappedLines.push(line);
+			} else {
+				for (const wrappedLine of wrapTextWithAnsi(line, contentWidth)) {
+					wrappedLines.push(wrappedLine);
+				}
+			}
+		}
+
+		// Add margins and background to each wrapped line
+		const leftMargin = " ".repeat(this.paddingX);
+		const rightMargin = " ".repeat(this.paddingX);
+		const bgFn = this.defaultTextStyle?.bgColor;
+		const lines: string[] = [];
+
+		for (const line of wrappedLines) {
+			if (isImageLine(line)) {
+				lines.push(line);
+				continue;
+			}
+
+			const lineWithMargins = leftMargin + line + rightMargin;
+
+			if (bgFn) {
+				lines.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
+			} else {
+				// No background - just pad to width
+				const visibleLen = visibleWidth(lineWithMargins);
+				const paddingNeeded = Math.max(0, width - visibleLen);
+				lines.push(lineWithMargins + " ".repeat(paddingNeeded));
+			}
+		}
+		return lines;
 	}
 
 	/**

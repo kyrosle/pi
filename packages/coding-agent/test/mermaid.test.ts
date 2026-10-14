@@ -105,4 +105,24 @@ describe("Mermaid rendering", () => {
 		expect(transformMermaid(markdown, { mode: "final" })).not.toContain("```mermaid");
 		expect(transformMermaid(markdown, { messageType: "assistant-thinking" })).toBe(markdown);
 	});
+
+	it("returns text without a Mermaid candidate unchanged", () => {
+		const markdown = "Plain **text** with `code`.\n\n```ts\nconst a = 1;\n```\n\n- item\n";
+
+		expect(transformMermaid(markdown)).toBe(markdown);
+		expect(transformMermaid("The word mermaid in prose stays as written.")).toBe(
+			"The word mermaid in prose stays as written.",
+		);
+	});
+
+	it("still renders Mermaid fences whose info string differs in case", () => {
+		const rendered = transformMermaid("```MERMAID\nflowchart LR\n  A --> B\n```");
+
+		expect(rendered).not.toContain("```MERMAID");
+		expect(rendered).toContain("───▶");
+	});
+
+	it("keeps CRLF normalization for text without a Mermaid candidate", () => {
+		expect(transformMermaid("first\r\nsecond\rthird")).toBe("first\nsecond\nthird");
+	});
 });

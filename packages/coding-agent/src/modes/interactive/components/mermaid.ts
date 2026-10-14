@@ -68,6 +68,12 @@ export function createMermaidMarkdownTransformer(options: MermaidTransformerOpti
 			return markdown;
 		}
 
+		// Only a fence whose info string names mermaid can match, so text without that word (case-insensitive)
+		// needs no lexing. Keep CR/CRLF on the lexer path: Marked normalizes them to LF, which later transformers see.
+		if (!/mermaid/i.test(markdown) && !markdown.includes("\r")) {
+			return markdown;
+		}
+
 		return markdownParser
 			.lexer(markdown)
 			.map((token) => {

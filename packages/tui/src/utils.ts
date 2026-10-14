@@ -47,8 +47,8 @@ const terminalSpacingMarkRegex =
 	/^(?:[\p{Spacing_Mark}--[\u1734\u302E\u302F]]|[\u065F\u0F7F\u102B\u102C\u1031\u1033-\u1035\u1038\u103A-\u103E])+$/v;
 const rgiEmojiRegex = /^\p{RGI_Emoji}$/v;
 
-// Cache for non-ASCII strings
-const WIDTH_CACHE_SIZE = 512;
+// Keep non-ASCII widths available for resize after streaming skips unchanged blocks.
+const WIDTH_CACHE_SIZE = 1024;
 const widthCache = new Map<string, number>();
 
 export const cjkBreakRegex =
