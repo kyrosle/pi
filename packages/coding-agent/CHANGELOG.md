@@ -79,6 +79,7 @@
 - Moved complete tool-output archiving and bounded excerpts into a default built-in extension, using a validated context-budget hook while keeping request preflight and overflow recovery in the host
 - Changed Grok hover previews to wait two seconds by default, with `/grok-hover-delay` persisting an extension-owned delay setting
 - Changed the Grok UI prototype to distinguish user messages and replies with role headings and a blue-gray user background, while reducing emphasis on thinking and tool output
+- Changed streamed assistant messages to keep their Markdown components between updates, and skipped Mermaid parsing for text without a Mermaid fence, reducing per-update render cost for long responses
 
 ## [1.2.0] - 2026-10-12
 

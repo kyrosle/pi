@@ -7,6 +7,10 @@
 - Added an optional `setHoverPreviewDelay()` hook with cancellation while waiting, so extensions can configure pointer-preview timing without duplicating viewport mouse handling
 - Added an opt-in fullscreen conversation timeline with pointer previews and turn navigation, and non-capturing hover previews; the Grok extension owns its scrollable preview component
 
+### Changed
+
+- Changed `Markdown` to reuse the rendered lines of unchanged top-level blocks across `setText()` updates, so streaming a long response re-wraps only the blocks that changed; `invalidate()` still rebuilds everything. Increased the bounded non-ASCII width cache to avoid slower resize after streaming
+
 ### Fixed
 
 - Fixed native Kitty image rows interrupting hover previews and overlays; image data and placement survive text compositing, and overlapping images temporarily draw below overlay backgrounds
