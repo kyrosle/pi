@@ -9,6 +9,7 @@ import {
 	getCapabilities,
 	setCapabilities,
 	setKeybindings,
+	stripTerminalSequences,
 	Text,
 	type TUI,
 	TuiAltScreen,
@@ -20,11 +21,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultEditorTheme } from "../../../tui/test/test-themes.ts";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal.ts";
 import { PreviewPanel } from "../../examples/extensions/grok-ui/preview-panel.ts";
-import grokUi, { GrokEditor, GrokMenu } from "../../examples/extensions/grok-ui.ts";
+import grokUi, { GrokMenu } from "../../examples/extensions/grok-ui.ts";
 import type { ToolRenderContext, ToolRenderers } from "../../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
 import { createChatViewport } from "../../src/modes/interactive/chat-viewport.ts";
 import { AssistantMessageComponent } from "../../src/modes/interactive/components/assistant-message.ts";
+import { CustomEditor } from "../../src/modes/interactive/components/custom-editor.ts";
 import { WorkingStatusIndicator } from "../../src/modes/interactive/components/status-indicator.ts";
 import { ToolExecutionComponent } from "../../src/modes/interactive/components/tool-execution.ts";
 import { UserMessageComponent } from "../../src/modes/interactive/components/user-message.ts";
@@ -53,32 +55,32 @@ afterEach(() => {
 
 function createEditor(columns = 80) {
 	const tui = new TuiMainScreen(new VirtualTerminal(columns, 24));
-	return new GrokEditor(tui, defaultEditorTheme, new KeybindingsManager(), () => "provider/model · medium");
+	return new CustomEditor(tui, defaultEditorTheme, new KeybindingsManager(), {
+		paddingX: 1,
+		embedWorkingStatus: true,
+	});
 }
 
 describe("Grok editor", () => {
 	it.each([4, 12, 24, 80, 120])("fits Chinese, combining characters and emoji in %i columns", (width) => {
 		const editor = createEditor(width);
+		const emptyLines = editor.render(width);
+		expect(stripAnsi(emptyLines[0])).toBe("─".repeat(width));
+		expect(stripAnsi(emptyLines.at(-1) ?? "")).toBe("─".repeat(width));
 		editor.focused = true;
 		editor.setText("你好，世界 e\u0301 👨‍👩‍👧‍👦\nsecond line");
 		const lines = editor.render(width);
 		expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
 		expect(lines.join("\n")).toContain(CURSOR_MARKER);
-		if (width >= 6) {
-			expect(stripAnsi(lines[0])).toMatch(/^╭.*╮$/);
-			expect(stripAnsi(lines.at(-1) ?? "")).toMatch(/^╰.*╯$/);
-		}
 	});
 
 	it("retains configurable submission, interruption, history and bracketed paste", () => {
 		const keybindings = new KeybindingsManager({ "tui.input.submit": "ctrl+enter", "app.interrupt": "ctrl+q" });
 		setKeybindings(keybindings);
-		const editor = new GrokEditor(
-			new TuiMainScreen(new VirtualTerminal()),
-			defaultEditorTheme,
-			keybindings,
-			() => "Pi",
-		);
+		const editor = new CustomEditor(new TuiMainScreen(new VirtualTerminal()), defaultEditorTheme, keybindings, {
+			paddingX: 1,
+			embedWorkingStatus: true,
+		});
 		const submit = vi.fn();
 		const interrupt = vi.fn();
 		editor.onSubmit = submit;
@@ -97,7 +99,10 @@ describe("Grok editor", () => {
 
 	it("keeps working status in the top border", () => {
 		const tui = new TuiMainScreen(new VirtualTerminal());
-		const editor = new GrokEditor(tui, defaultEditorTheme, new KeybindingsManager(), () => "Pi");
+		const editor = new CustomEditor(tui, defaultEditorTheme, new KeybindingsManager(), {
+			paddingX: 1,
+			embedWorkingStatus: true,
+		});
 		const working = new WorkingStatusIndicator(tui, "Working", { frames: ["*"] });
 		try {
 			editor.setWorkingStatusIndicator(working);
@@ -107,16 +112,16 @@ describe("Grok editor", () => {
 		}
 	});
 
-	it("positions the cursor at the clicked character inside the frame", () => {
+	it("positions the cursor at the clicked character with native padding", () => {
 		const editor = createEditor();
 		editor.setText("abcd");
 		editor.render(80);
 		const event: TuiMouseEvent = {
 			type: "click",
 			button: "left",
-			x: 4,
+			x: 3,
 			y: 1,
-			screenX: 4,
+			screenX: 3,
 			screenY: 1,
 			width: 80,
 			height: 3,
@@ -131,6 +136,32 @@ describe("Grok editor", () => {
 });
 
 describe("Grok extension compatibility", () => {
+	it("installs the native editor with horizontal rules and embedded working status", async () => {
+		const harness = await createHarness({ extensionFactories: [grokUi] });
+		harnesses.push(harness);
+		const tui = new TuiAltScreen(new VirtualTerminal());
+		const setEditorComponent = vi.fn<ReturnType<typeof createTestUiContext>["setEditorComponent"]>();
+		await harness.session.bindExtensions({
+			mode: "tui",
+			uiContext: createTestUiContext({ setEditorComponent }),
+		});
+		const editor = setEditorComponent.mock.lastCall?.[0]?.(tui, defaultEditorTheme, new KeybindingsManager());
+		expect(editor).toBeInstanceOf(CustomEditor);
+		if (!(editor instanceof CustomEditor)) throw new Error("Missing native editor");
+		editor.setText("draft");
+		const lines = editor.render(80).map(stripAnsi);
+		expect(lines[0]).toBe("─".repeat(80));
+		expect(lines.at(-1)).toBe("─".repeat(80));
+		expect(stripTerminalSequences(lines[1]).trim()).toBe("draft");
+		const working = new WorkingStatusIndicator(tui, "Working", { frames: ["*"] });
+		try {
+			editor.setWorkingStatusIndicator(working);
+			expect(stripAnsi(editor.render(80)[0])).toContain("Working");
+		} finally {
+			working.dispose();
+		}
+	});
+
 	it("defaults hover to two seconds and applies persistent settings without changing model context", async () => {
 		const harness = await createHarness({ extensionFactories: [grokUi] });
 		harnesses.push(harness);
@@ -623,7 +654,10 @@ describe("Grok popup", () => {
 	it("returns fullscreen keyboard focus to the existing draft after closing", async () => {
 		const terminal = new VirtualTerminal(80, 24);
 		const tui = new TuiAltScreen(terminal);
-		const editor = new GrokEditor(tui, defaultEditorTheme, new KeybindingsManager(), () => "Pi");
+		const editor = new CustomEditor(tui, defaultEditorTheme, new KeybindingsManager(), {
+			paddingX: 1,
+			embedWorkingStatus: true,
+		});
 		editor.setText("未发送的草稿");
 		tui.addChild(editor);
 		tui.setFocus(editor);
@@ -772,7 +806,10 @@ describe("Grok timeline and compact tool previews", () => {
 		const component = new ToolExecutionComponent(toolName, "preview-test", args, {}, renderer, tui, harness.tempDir);
 		component.markExecutionStarted();
 		component.updateResult(result);
-		const editor = new GrokEditor(tui, defaultEditorTheme, new KeybindingsManager(), () => "Pi");
+		const editor = new CustomEditor(tui, defaultEditorTheme, new KeybindingsManager(), {
+			paddingX: 1,
+			embedWorkingStatus: true,
+		});
 		editor.setText("draft");
 		const document = new Container();
 		document.addChild(new UserMessageComponent("first question"));

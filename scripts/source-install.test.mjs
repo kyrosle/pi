@@ -6,9 +6,26 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
-import { activateSourceInstall, checkSourceInstall, sourceInstallPaths, uninstallSourceInstall, writeSourceGrokEntry } from "./source-install.mjs";
+import { activateSourceInstall, checkSourceInstall, sourceInstallPaths, uninstallSourceInstall, writeSourceGrokEntry, writeSourceLauncher } from "./source-install.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+
+test("source launcher forwards subcommands unchanged and adds defaults only to session arguments", (t) => {
+	const { home } = fixture(t);
+	write(join(home, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js"),
+		"console.log(JSON.stringify(process.argv.slice(2)));\n");
+	writeSourceLauncher(home);
+	const run = (args) => JSON.parse(execFileSync(join(home, "pi"), args, { encoding: "utf8" }));
+	for (const command of ["install", "remove", "uninstall", "update", "list", "config", "auth", "mcp"]) {
+		assert.deepEqual(run([command, "--help"]), [command, "--help"]);
+	}
+	assert.deepEqual(run(["list"]), ["list"]);
+	assert.deepEqual(run(["install", "./path with 'quotes'", "-l"]), ["install", "./path with 'quotes'", "-l"]);
+	const defaults = ["--use-theme", "grok", "--tui-mode", "fullscreen"];
+	for (const args of [[], ["-r"], ["explain this project"], ["--", "list"], ["--tui-mode", "regular"], ["--theme", "./custom.json", "--use-theme", "custom"]]) {
+		assert.deepEqual(run(args), [...defaults, ...args]);
+	}
+});
 
 function fixture(t) {
 	const home = mkdtempSync(join(tmpdir(), "pi source '#?install-"));
@@ -100,6 +117,39 @@ test("removes only installer-created links on a fresh uninstall", (t) => {
 	assert.equal(existsSync(paths.launcher), false);
 	assert.equal(existsSync(join(paths.agentDirectory, "extensions", "grok-ui.ts")), false);
 	assert.equal(existsSync(paths.root), false);
+});
+
+test("migrates a shadowing legacy launcher on update and restores it on uninstall", (t) => {
+	const { home, paths } = fixture(t);
+	const first = snapshot(paths, "first");
+	activateSourceInstall(paths, first);
+	const original = `#!/bin/sh\nexec /usr/bin/node '${join(home, ".local/share/pi/releases/old/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")}' "$@"\n`;
+	write(paths.legacyLauncher, original, 0o755);
+	activateSourceInstall(paths, first);
+	assert.equal(execFileSync(paths.legacyLauncher, ["argument with spaces"], { encoding: "utf8" }), "first\nargument with spaces\n");
+	const second = snapshot(paths, "second");
+	activateSourceInstall(paths, second);
+	assert.equal(realpathSync(paths.legacyLauncher), realpathSync(paths.launcher));
+	assert.equal(execFileSync(paths.legacyLauncher, { encoding: "utf8" }), "second\n");
+	uninstallSourceInstall(paths);
+	assert.equal(readFileSync(paths.legacyLauncher, "utf8"), original);
+	assert.equal(lstatSync(paths.legacyLauncher).mode & 0o777, 0o755);
+});
+
+test("does not adopt unrelated Bun launchers or create a missing alias", (t) => {
+	const { paths } = fixture(t);
+	const first = snapshot(paths, "first");
+	activateSourceInstall(paths, first);
+	assert.equal(existsSync(paths.legacyLauncher), false);
+	write(paths.legacyLauncher, "#!/bin/sh\nexec unrelated-pi \"$@\"\n", 0o755);
+	activateSourceInstall(paths, first);
+	assert.equal(lstatSync(paths.legacyLauncher).isSymbolicLink(), false);
+	rmSync(paths.legacyLauncher);
+	symlinkSync(paths.launcher, paths.legacyLauncher);
+	activateSourceInstall(paths, first);
+	assert.equal(readlinkSync(paths.legacyLauncher), paths.launcher);
+	uninstallSourceInstall(paths);
+	assert.equal(readlinkSync(paths.legacyLauncher), paths.launcher);
 });
 
 test("refuses changed links before updating or uninstalling", (t) => {
