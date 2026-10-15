@@ -1,12 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { codingAgentName, smokeTestCodingAgent } from "./coding-agent-smoke.mjs";
 import { installConsumer, smokeTestNpmConsumer } from "./local-package-install.mjs";
 import { produceArtifactSet } from "./package-artifacts.mjs";
-import { activateSourceInstall, checkSourceInstall, sourceInstallPaths, writeSourceGrokEntry } from "./source-install.mjs";
+import { activateSourceInstall, checkSourceInstall, sourceInstallPaths, writeSourceGrokEntry, writeSourceLauncher } from "./source-install.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const paths = sourceInstallPaths();
@@ -19,7 +19,6 @@ try {
 	installConsumer({ artifactSet, directory, packageNames: [codingAgentName] });
 	smokeTestNpmConsumer({ artifactSet, directory, packageName: codingAgentName });
 	smokeTestCodingAgent(directory);
-	const packageDirectory = join(directory, "node_modules", codingAgentName);
 	cpSync(join(repoRoot, ".pi", "themes", "grok.json"), join(directory, "grok.json"));
 	writeSourceGrokEntry(directory);
 	const smokeHome = mkdtempSync(join(tmpdir(), "pi-source-grok-smoke-"));
@@ -35,12 +34,7 @@ try {
 		rmSync(smokePath, { force: true });
 		rmSync(smokeHome, { recursive: true, force: true });
 	}
-	const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-	writeFileSync(join(directory, "pi"), `#!/usr/bin/env bash
-set -euo pipefail
-# pi-source-install: paths are pinned to this snapshot, including after an update.
-exec ${quote(process.execPath)} ${quote(join(packageDirectory, "dist", "bundle", "cli.js"))} --theme ${quote(join(directory, "grok.json"))} --use-theme grok --tui-mode fullscreen "$@"
-`, { mode: 0o755 });
+	writeSourceLauncher(directory);
 	activateSourceInstall(paths, directory);
 	console.log(`Installed ${paths.launcher} from ${artifactSet.source.commit}${artifactSet.source.dirty ? " (dirty checkout)" : ""}.`);
 	console.log("Restart running Pi sessions after updating. Update this install with git pull and ./install.sh, not pi update.");

@@ -43,7 +43,7 @@
 
 ### Added
 
-- Added a Grok UI prototype extension with rounded input framing, a conversation timeline, compact tool calls with hover previews, and a display-options overlay using Pi's fullscreen layout and extension APIs
+- Added a Grok UI prototype extension with a conversation timeline, compact tool calls with hover previews, and a display-options overlay using Pi's fullscreen layout and extension APIs
 - Added a Models Configuration reference generated from the `models.json` schema, listing all provider, model, model override, and compatibility fields ([#10790](https://github.com/earendil-works/pi/issues/10790))
 - Codemode `models.classify()` now accepts `images` for TypeSafe's Jev and Cloudflare's Clef models on `typesafe`, `cloudflare-workers-ai`, and OpenRouter, and lists Clef Omni and Jev 1.14 on Workers AI.
 - Provider-level `compat` in `models.json` now also applies to classifier models, with the System One fields `imageInput` and `sendImageOptInHeader` for proxies that serve another service's classifiers. Extension classifier models accept `compat` too.
@@ -62,6 +62,9 @@
 
 ### Fixed
 
+- Fixed duplicate Grok theme warnings by using the installed theme discovery link instead of loading the theme again through launcher arguments
+- Fixed the source launcher treating CLI subcommands such as `pi list` as chat prompts; subcommands now pass through without prepended interactive options
+- Fixed source installs being shadowed by the old local-release launcher in `~/.bun/bin/pi`; recognized legacy wrappers now follow the source installation and are restored on uninstall
 - Fixed oversized tool results blocking context-overflow recovery: complete results remain in history and private text/JSON files while requests use bounded excerpts, preserve tool-call pairing, and are checked after compaction
 - Fixed oversized summary requests by splitting and merging transcripts and reducing chunk size after an input-size rejection
 - Fixed compaction and branch summaries failing with "generation hit the token cap" when reasoning used most of the fixed summary output limit. Summaries now use the model's output limit, and `compaction.reserveTokens` only controls when compaction starts ([#9512](https://github.com/earendil-works/pi/issues/9512), [#9075](https://github.com/earendil-works/pi/issues/9075)).
@@ -92,6 +95,7 @@
 
 ### Changed
 
+- Changed Grok input to use the native editor's top and bottom horizontal rules, removing side borders and the duplicate model/thinking caption while retaining embedded working status
 - Changed Grok message headings to show the system username and each reply's recorded model ID, with one heading when the extension is loaded twice, and the Grok header to show the current model ID
 - Added the assistant message's model ID to Markdown transformer context
 - Moved Grok tool summaries and preview panels into the extension, retaining host support for pointer lifecycle and expanding individual tools

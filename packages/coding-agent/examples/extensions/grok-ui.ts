@@ -11,7 +11,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
-	type EditorTheme,
 	isViewportTUI,
 	SelectList,
 	Spacer,
@@ -28,44 +27,6 @@ import { grokToolRenderers } from "./grok-ui/tool-renderers.ts";
 
 function isHoverDelay(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 0x7fffffff;
-}
-
-export class GrokEditor extends CustomEditor {
-	private bottomBorder = "";
-	private getCaption: () => string;
-
-	constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager, getCaption: () => string) {
-		super(tui, theme, keybindings, { paddingX: 1, embedWorkingStatus: true });
-		this.getCaption = getCaption;
-	}
-
-	protected override renderBottomBorder(width: number, hiddenLineCount: number): string {
-		if (hiddenLineCount > 0 || width < 6) {
-			this.bottomBorder = super.renderBottomBorder(width, hiddenLineCount);
-		} else {
-			const caption = truncateToWidth(` ${this.getCaption()} `, width - 2, "");
-			this.bottomBorder = this.borderColor(`─${caption}${"─".repeat(width - visibleWidth(caption) - 1)}`);
-		}
-		return this.bottomBorder;
-	}
-
-	override render(width: number): string[] {
-		if (width < 6) return super.render(width);
-		const lines = super.render(width - 2);
-		const bottom = lines.lastIndexOf(this.bottomBorder);
-		return lines.map((line, index) => {
-			if (index === 0) return this.borderColor("╭") + line + this.borderColor("╮");
-			if (index === bottom) return this.borderColor("╰") + line + this.borderColor("╯");
-			if (index > bottom) return ` ${line} `;
-			return this.borderColor("│") + line + this.borderColor("│");
-		});
-	}
-
-	override handleMouse(event: TuiMouseEvent): ReturnType<CustomEditor["handleMouse"]> {
-		if (event.width < 6) return super.handleMouse(event);
-		if (event.x === 0 || event.x >= event.width - 1) return undefined;
-		return super.handleMouse({ ...event, x: event.x - 1, width: event.width - 2 });
-	}
 }
 
 export class GrokMenu extends Container {
@@ -278,10 +239,7 @@ export default function grokUi(pi: ExtensionAPI): void {
 		});
 		ctx.ui.setEditorComponent(
 			(tui, theme, keybindings) =>
-				new GrokEditor(tui, theme, keybindings, () => {
-					const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "No model selected";
-					return `${model} · ${pi.getThinkingLevel()}`;
-				}),
+				new CustomEditor(tui, theme, keybindings, { paddingX: 1, embedWorkingStatus: true }),
 		);
 	});
 

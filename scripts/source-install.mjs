@@ -22,6 +22,20 @@ export function writeSourceGrokEntry(directory) {
 	writeFileSync(join(directory, "grok-ui.js"), `export { default } from ${JSON.stringify(extension.href)};\n`);
 }
 
+export function writeSourceLauncher(directory, nodeExecutable = process.execPath) {
+	const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+	const command = `${quote(nodeExecutable)} ${quote(join(directory, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js"))}`;
+	writeFileSync(join(directory, "pi"), `#!/usr/bin/env bash
+set -euo pipefail
+# pi-source-install: paths are pinned to this snapshot, including after an update.
+# CLI subcommands must stay first and do not accept interactive theme options.
+case "\${1-}" in
+  install|remove|uninstall|update|list|config|auth|mcp) exec ${command} "$@" ;;
+esac
+exec ${command} --use-theme grok --tui-mode fullscreen "$@"
+`, { mode: 0o755 });
+}
+
 export function sourceInstallPaths(homeDirectory = homedir(), agentDirectory = process.env.PI_CODING_AGENT_DIR) {
 	const root = join(homeDirectory, ".local", "share", "pi-source");
 	return {
@@ -29,6 +43,7 @@ export function sourceInstallPaths(homeDirectory = homedir(), agentDirectory = p
 		current: join(root, "current"),
 		state: join(root, "installation.json"),
 		launcher: join(homeDirectory, ".local", "bin", "pi"),
+		legacyLauncher: join(homeDirectory, ".bun", "bin", "pi"),
 		agentDirectory: resolve(agentDirectory || join(homeDirectory, ".pi", "agent")),
 		legacyAgentDirectories: [join(homeDirectory, ".pi", "agent"), join(homeDirectory, ".tpi", "agent")],
 	};
@@ -69,6 +84,17 @@ function readState(paths) {
 
 function resourceLinks(paths, includeMissing = false) {
 	const links = [{ path: paths.launcher, target: join(paths.current, "pi") }];
+	let migrateLauncher = isManagedLink(paths.legacyLauncher, join(paths.current, "pi"));
+	if (!migrateLauncher && pathExists(paths.legacyLauncher)) {
+		const stat = lstatSync(paths.legacyLauncher);
+		if (stat.isFile() && stat.size < 4096) {
+			const script = readFileSync(paths.legacyLauncher, "utf8");
+			// Only adopt the old local-release wrapper, not arbitrary Bun executables or package-manager links.
+			migrateLauncher = script.includes(`${join(dirname(paths.root), "pi", "releases")}/`) &&
+				/^#!\/bin\/sh\nexec [^\n]+\/node_modules\/@earendil-works\/pi-coding-agent\/dist\/bundle\/cli\.js['"]? "\$@"\n?$/.test(script);
+		}
+	}
+	if (includeMissing || migrateLauncher) links.push({ path: paths.legacyLauncher, target: join(paths.current, "pi") });
 	const agentDirectories = new Set([paths.agentDirectory, ...paths.legacyAgentDirectories]);
 	for (const directory of agentDirectories) {
 		const primary = directory === paths.agentDirectory;
