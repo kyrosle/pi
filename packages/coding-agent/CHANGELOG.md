@@ -18,6 +18,7 @@
 
 ### Added
 
+- Added a Grok UI prototype extension with rounded input framing, a conversation timeline, compact tool calls with hover previews, and a display-options overlay using Pi's fullscreen layout and extension APIs
 - Added a Models Configuration reference generated from the `models.json` schema, listing all provider, model, model override, and compatibility fields ([#10790](https://github.com/earendil-works/pi/issues/10790))
 - Codemode `models.classify()` now accepts `images` for TypeSafe's Jev and Cloudflare's Clef models on `typesafe`, `cloudflare-workers-ai`, and OpenRouter, and lists Clef Omni and Jev 1.14 on Workers AI.
 - Provider-level `compat` in `models.json` now also applies to classifier models, with the System One fields `imageInput` and `sendImageOptInHeader` for proxies that serve another service's classifiers. Extension classifier models accept `compat` too.
@@ -36,6 +37,8 @@
 
 ### Fixed
 
+- Fixed oversized tool results blocking context-overflow recovery: complete results remain in history and private text/JSON files while requests use bounded excerpts, preserve tool-call pairing, and are checked after compaction
+- Fixed oversized summary requests by splitting and merging transcripts and reducing chunk size after an input-size rejection
 - Fixed compaction and branch summaries failing with "generation hit the token cap" when reasoning used most of the fixed summary output limit. Summaries now use the model's output limit, and `compaction.reserveTokens` only controls when compaction starts ([#9512](https://github.com/earendil-works/pi/issues/9512), [#9075](https://github.com/earendil-works/pi/issues/9075)).
 - Fixed `models.schema.json` missing descriptions for provider and model fields, so editors showed no hints for them ([#10790](https://github.com/earendil-works/pi/issues/10790))
 - Fixed `pi update` failing with "Managed install marker is missing or invalid" when `managed-install.json` starts with a UTF-8 BOM, which Windows PowerShell 5.1 adds when it rewrites the file.
@@ -62,6 +65,17 @@
 - Fixed Markdown bold and italic not rendering next to CJK punctuation ([#10730](https://github.com/earendil-works/pi/pull/10730) by [@theBucky](https://github.com/theBucky))
 - Fixed `@` file autocomplete returning no results for queries containing regex metacharacters such as `[` or `(` ([#10972](https://github.com/earendil-works/pi/issues/10972))
 
+### Changed
+
+- Changed Grok message headings to show the system username and each reply's recorded model ID, with one heading when the extension is loaded twice, and the Grok header to show the current model ID
+- Added the assistant message's model ID to Markdown transformer context
+- Moved Grok tool summaries and preview panels into the extension, retaining host support for pointer lifecycle and expanding individual tools
+- Moved complete tool-output archiving and bounded excerpts into a default built-in extension, using a validated context-budget hook while keeping request preflight and overflow recovery in the host
+- Changed Grok hover previews to wait two seconds by default, with `/grok-hover-delay` persisting an extension-owned delay setting
+- Changed the Grok UI prototype to distinguish user messages and replies with role headings and a blue-gray user background, while reducing emphasis on thinking and tool output
+- Changed streamed assistant messages to keep their Markdown components between updates, and skipped Mermaid parsing for text without a Mermaid fence, reducing per-update render cost for long responses
+- `generateSummary()` and `generateSummaryWithUsage()` now ignore their `reserveTokens` parameter. Summary requests use the model's output limit instead.
+
 ## [1.3.0] - 2026-10-15
 
 ### New Features
@@ -84,8 +98,6 @@
 
 ### Fixed
 
-- Fixed oversized tool results blocking context-overflow recovery: complete results remain in history and private text/JSON files while requests use bounded excerpts, preserve tool-call pairing, and are checked after compaction
-- Fixed oversized summary requests by splitting and merging transcripts and reducing chunk size after an input-size rejection
 - Pinned internal Pi dependencies to exact release versions to prevent fresh installs from mixing incompatible packages ([#10865](https://github.com/earendil-works/pi/issues/10865))
 - Fixed resumed sessions dropping tools activated during the session. Resume now restores the session's active tools, with `--tools +name`/`-name` entries applied to them, unless `--tools` with tool names, `--no-tools`, or `--no-builtin-tools` selects tools explicitly ([#10785](https://github.com/earendil-works/pi/issues/10785))
 - Fixed stopping a codemode script or reaching its deadline waiting for a non-interruptible built-in to return on Bun ([#10748](https://github.com/earendil-works/pi/issues/10748))
@@ -109,20 +121,6 @@
 - Fixed tool calls whose final arguments are malformed JSON silently running with only the fields parsed before the error; they now fail validation and show the model the raw arguments it sent ([#10897](https://github.com/earendil-works/pi/issues/10897))
 - Fixed Claude Haiku 5.5 and Claude Opus 5 not supporting the `off` thinking level ([#10753](https://github.com/earendil-works/pi/issues/10753))
 - Fixed `done()` of an extension's `ctx.ui.custom({ overlay: true })` closing the topmost overlay instead of its own, which left the finished overlay on screen and another extension's dialog unresolved ([#10648](https://github.com/earendil-works/pi/issues/10648), [#10999](https://github.com/earendil-works/pi/pull/10999) by [@masonc15](https://github.com/masonc15))
-
-### Added
-
-- Added a Grok UI prototype extension with rounded input framing, a conversation timeline, compact tool calls with hover previews, and a display-options overlay using Pi's fullscreen layout and extension APIs
-
-### Changed
-
-- Changed Grok message headings to show the system username and each reply's recorded model ID, with one heading when the extension is loaded twice, and the Grok header to show the current model ID
-- Added the assistant message's model ID to Markdown transformer context
-- Moved Grok tool summaries and preview panels into the extension, retaining host support for pointer lifecycle and expanding individual tools
-- Moved complete tool-output archiving and bounded excerpts into a default built-in extension, using a validated context-budget hook while keeping request preflight and overflow recovery in the host
-- Changed Grok hover previews to wait two seconds by default, with `/grok-hover-delay` persisting an extension-owned delay setting
-- Changed the Grok UI prototype to distinguish user messages and replies with role headings and a blue-gray user background, while reducing emphasis on thinking and tool output
-- Changed streamed assistant messages to keep their Markdown components between updates, and skipped Mermaid parsing for text without a Mermaid fence, reducing per-update render cost for long responses
 
 ## [1.2.0] - 2026-10-12
 
