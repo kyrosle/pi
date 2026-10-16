@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
-import { describe, expect, test } from "vitest";
+import { TuiAltScreen, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
+import { describe, expect, test, vi } from "vitest";
+import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { getMarkdownTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -122,9 +123,168 @@ describe("AssistantMessageComponent", () => {
 		expect(component.handleMouse(event)?.handled).toBe(true);
 
 		const collapsed = stripAnsi(component.render(width).join("\n"));
-		expect(collapsed).not.toContain("first reasoning");
+		expect(collapsed).toContain("▸ Thinking... · 1 line · first reasoning");
 		expect(collapsed).toContain("Thinking...");
 		expect(collapsed).toContain("second reasoning");
+	});
+
+	test("keeps collapsed thinking to one safe row at narrow and Unicode widths without rendering Markdown", () => {
+		initTheme("dark");
+		let transforms = 0;
+		const component = new AssistantMessageComponent(undefined, true, undefined, "Thinking...", 1, [
+			(text) => {
+				transforms++;
+				return text;
+			},
+		]);
+		for (const size of [1, 100, 1000]) {
+			component.updateContent(
+				createAssistantMessage([
+					{
+						type: "thinking",
+						thinking: `\x1b[31m中文 e\u0301 👨‍👩‍👧‍👦\x1b[0m\r\t安全\n${"more\n".repeat(size)}last`,
+					},
+				]),
+				true,
+			);
+			for (const width of [1, 4, 12, 24, 80]) {
+				const lines = component.render(width).map(stripAnsi);
+				expect(lines).toHaveLength(2);
+				expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+				expect(lines.join("")).not.toMatch(/[\r\t\x1b]/);
+			}
+			expect(stripAnsi(component.render(100)[1])).toContain(`${size + 2} lines · 中文`);
+		}
+		expect(transforms).toBe(0);
+	});
+
+	test("reuses completed thinking code layouts across folding and subsequent streamed updates", () => {
+		initTheme("dark");
+		let highlights = 0;
+		const component = new AssistantMessageComponent(undefined, true, {
+			...getMarkdownTheme(),
+			highlightCode: (code) => {
+				highlights++;
+				return code.split("\n");
+			},
+		});
+		const message = createAssistantMessage([{ type: "thinking", thinking: "```ts\nconst a = 1;\n```\n\nTail" }]);
+		component.updateContent(message, true);
+		component.render(80);
+		expect(highlights).toBe(0);
+		component.setHideThinkingBlock(false);
+		component.render(80);
+		expect(highlights).toBe(1);
+		component.setHideThinkingBlock(true);
+		component.updateContent(
+			createAssistantMessage([{ type: "thinking", thinking: "```ts\nconst a = 1;\n```\n\nTail grows" }]),
+			false,
+		);
+		component.render(80);
+		expect(highlights).toBe(1);
+		component.setHideThinkingBlock(false);
+		component.render(80);
+		expect(highlights).toBe(1);
+	});
+
+	test("previews current streamed thinking, scrolls independently, expands on click and respects the global toggle", async () => {
+		initTheme("dark");
+		const terminal = new VirtualTerminal(100, 30);
+		const tui = new TuiAltScreen(terminal);
+		tui.setMouseHoverEnabled(true);
+		const component = new AssistantMessageComponent(undefined, true, undefined, "Thinking...", 1, [], tui);
+		const thinking = Array.from({ length: 60 }, (_, i) => `reasoning ${i}`).join("\n");
+		component.updateContent(createAssistantMessage([{ type: "thinking", thinking }]), true);
+		tui.addChild(component);
+		tui.start();
+		try {
+			await terminal.waitForRender();
+			const row = terminal.getViewport().findIndex((line) => line.includes("Thinking...")) + 1;
+			expect(row).toBeGreaterThan(0);
+			terminal.sendInput(`\x1b[<35;5;${row}M`);
+			await terminal.waitForRender();
+			expect(tui.hasOverlay()).toBe(true);
+			expect(terminal.getViewport().join("\n")).toContain("reasoning 1");
+			const inline = component.render(100);
+			const panelRow = terminal.getViewport().findIndex((line) => line.includes("wheel to scroll")) + 1;
+			terminal.sendInput(`\x1b[<65;10;${panelRow}M`);
+			await terminal.waitForRender();
+			expect(component.render(100)).toEqual(inline);
+			expect(terminal.getViewport().join("\n")).not.toMatch(/│\s+reasoning 0\s+│/);
+			component.updateContent(
+				createAssistantMessage([{ type: "thinking", thinking: `${thinking}\nnew tail` }]),
+				false,
+			);
+			tui.renderNow();
+			await terminal.flush();
+			expect(tui.hasOverlay()).toBe(true);
+			expect(terminal.getViewport().join("\n")).toContain("/61");
+			terminal.sendInput(`\x1b[<0;10;${panelRow}M`);
+			terminal.sendInput(`\x1b[<0;10;${panelRow}m`);
+			await terminal.waitForRender();
+			expect(tui.hasOverlay()).toBe(false);
+			expect(stripAnsi(component.render(100).join("\n"))).toContain("new tail");
+			component.setHideThinkingBlock(true);
+			expect(component.render(100)).toHaveLength(2);
+		} finally {
+			tui.stop();
+		}
+	});
+
+	test("keeps the hover delay across streamed updates and dismisses previews when thinking is removed", () => {
+		initTheme("dark");
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const tui = new TuiAltScreen(new VirtualTerminal(80, 24));
+		tui.setHoverPreviewDelay(100);
+		let transforms = 0;
+		const component = new AssistantMessageComponent(
+			undefined,
+			true,
+			undefined,
+			"Thinking...",
+			1,
+			[
+				(text) => {
+					transforms++;
+					return text;
+				},
+			],
+			tui,
+		);
+		const event: TuiMouseEvent = {
+			type: "move",
+			button: "none",
+			x: 1,
+			y: 1,
+			screenX: 1,
+			screenY: 1,
+			width: 80,
+			height: 2,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		};
+		tui.addChild(component);
+		tui.start();
+		try {
+			component.updateContent(createAssistantMessage([{ type: "thinking", thinking: "First" }]), true);
+			tui.renderNow();
+			component.handleMouse(event);
+			vi.advanceTimersByTime(50);
+			component.updateContent(createAssistantMessage([{ type: "thinking", thinking: "First\nlatest" }]), true);
+			component.render(80);
+			component.handleMouse(event);
+			expect(transforms).toBe(0);
+			expect(tui.hasOverlay()).toBe(false);
+			vi.advanceTimersByTime(51);
+			expect(tui.hasOverlay()).toBe(true);
+			expect(transforms).toBe(1);
+			component.updateContent(createAssistantMessage([{ type: "text", text: "answer" }]));
+			expect(tui.hasOverlay()).toBe(false);
+		} finally {
+			tui.stop();
+			vi.useRealTimers();
+		}
 	});
 
 	test("uses configured output padding for text and thinking", () => {

@@ -1,4 +1,10 @@
-import { keyHint, type Theme, type ToolRenderContext, type ToolRenderers } from "@earendil-works/pi-coding-agent";
+import {
+	keyHint,
+	PreviewPanel,
+	type Theme,
+	type ToolRenderContext,
+	type ToolRenderers,
+} from "@earendil-works/pi-coding-agent";
 import {
 	Box,
 	type Component,
@@ -13,7 +19,6 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { PreviewPanel } from "./preview-panel.ts";
 
 type RenderContext = ToolRenderContext<Record<string, unknown>, unknown>;
 type ToolResult = Parameters<NonNullable<ToolRenderers["renderResult"]>>[0];

@@ -2,15 +2,20 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	Container,
 	type DefaultTextStyle,
+	isViewportTUI,
 	Markdown,
 	type MarkdownTheme,
 	MouseRegion,
 	Spacer,
 	Text,
+	type TUI,
+	truncateToWidth,
 } from "@earendil-works/pi-tui";
 import type { MarkdownTransformContext, MarkdownTransformer } from "../../../core/extensions/types.ts";
+import { stripAnsi } from "../../../utils/ansi.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
+import { PreviewPanel } from "./preview-panel.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -37,6 +42,8 @@ export class AssistantMessageComponent extends Container {
 	private isStreaming = false;
 	private messageId?: string;
 	private timestamp?: string;
+	private tui?: TUI;
+	private previewMarkdown?: Markdown;
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
 	// Keyed by content position, so a streamed update reuses the Markdown (and its block cache) instead of rebuilding it.
 	private markdownRecords = new Map<string, MarkdownRecord>();
@@ -48,6 +55,7 @@ export class AssistantMessageComponent extends Container {
 		hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
 		markdownTransformers: readonly MarkdownTransformer[] = [],
+		tui?: TUI,
 		messageId?: string,
 		timestamp?: string,
 	) {
@@ -60,6 +68,7 @@ export class AssistantMessageComponent extends Container {
 		this.markdownTransformers = markdownTransformers;
 		this.messageId = messageId;
 		this.timestamp = timestamp;
+		this.tui = tui;
 
 		// Container for text/thinking content
 		this.contentContainer = new Container();
@@ -80,6 +89,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	setHideThinkingBlock(hide: boolean): void {
+		this.dismissThinkingPreview();
 		this.hideThinkingBlock = hide;
 		this.thinkingVisibilityOverrides.clear();
 		if (this.lastMessage) {
@@ -166,24 +176,64 @@ export class AssistantMessageComponent extends Container {
 
 				const runIndex = thinkingRunIndex++;
 				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
+				const thinking = thinkingBlocks.join("\n\n");
+				// Keep the component and block cache while collapsed, but render Markdown only on demand.
+				const markdown = this.acquireMarkdown(
+					previousRecords,
+					`thinking:${runStart}`,
+					thinking,
+					"assistant-thinking",
+					message.model,
+					{ color: (text: string) => theme.fg("thinkingText", text), italic: true },
+				);
+				let lineCount = 1;
+				for (let newline = thinking.indexOf("\n"); newline !== -1; newline = thinking.indexOf("\n", newline + 1)) {
+					lineCount++;
+				}
+				const firstLineEnd = thinking.indexOf("\n");
+				const excerpt = stripAnsi(
+					thinking.slice(0, Math.min(firstLineEnd < 0 ? thinking.length : firstLineEnd, 256)),
+				)
+					.replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, " ")
+					.trim();
+				const label = `▸ ${this.hiddenThinkingLabel} · ${lineCount} ${lineCount === 1 ? "line" : "lines"} · ${excerpt}`;
 				const thinkingComponent = hidden
-					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
-					: this.acquireMarkdown(
-							previousRecords,
-							`thinking:${runStart}`,
-							thinkingBlocks.join("\n\n"),
-							"assistant-thinking",
-							message.model,
-							{
-								color: (text: string) => theme.fg("thinkingText", text),
-								italic: true,
-							},
-						);
+					? {
+							render: (width: number) => [
+								theme.italic(
+									theme.fg("thinkingText", truncateToWidth(" ".repeat(this.outputPad) + label, width)),
+								),
+							],
+							invalidate() {},
+						}
+					: markdown;
+				const toggle = () => {
+					this.dismissThinkingPreview();
+					this.thinkingVisibilityOverrides.set(runIndex, !hidden);
+					if (this.lastMessage) this.updateContent(this.lastMessage);
+					this.tui?.requestRender();
+				};
 				this.contentContainer.addChild(
 					new MouseRegion(thinkingComponent, (event) => {
+						const tui = this.tui;
+						if (hidden && event.type === "move" && event.button === "none" && tui && isViewportTUI(tui)) {
+							this.previewMarkdown = markdown;
+							tui.showHoverPreview?.(
+								markdown,
+								new PreviewPanel(markdown, {
+									maxHeight: () =>
+										Math.min(tui.terminal.rows * 0.7, tui.transcriptViewportHeight ?? tui.terminal.rows),
+									border: (text) => theme.fg("borderMuted", text),
+									background: (text) => theme.bg("toolPendingBg", text),
+									hint: () => "Click to expand",
+									onClick: toggle,
+								}),
+								event,
+							);
+							return { handled: true, render: false };
+						}
 						if (event.type !== "click" || event.button !== "left") return undefined;
-						this.thinkingVisibilityOverrides.set(runIndex, !hidden);
-						if (this.lastMessage) this.updateContent(this.lastMessage);
+						toggle();
 						return { handled: true };
 					}),
 				);
@@ -191,6 +241,13 @@ export class AssistantMessageComponent extends Container {
 					this.contentContainer.addChild(new Spacer(1));
 				}
 			}
+		}
+
+		if (
+			this.previewMarkdown &&
+			![...this.markdownRecords.values()].some((r) => r.markdown === this.previewMarkdown)
+		) {
+			this.dismissThinkingPreview();
 		}
 
 		// Check if incomplete/failed - show after partial content.
@@ -217,6 +274,12 @@ export class AssistantMessageComponent extends Container {
 				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
 			}
 		}
+	}
+
+	private dismissThinkingPreview(): void {
+		if (!this.previewMarkdown) return;
+		if (this.tui && isViewportTUI(this.tui)) this.tui.hideHoverPreview?.();
+		this.previewMarkdown = undefined;
 	}
 
 	private acquireMarkdown(
