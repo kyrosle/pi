@@ -459,6 +459,8 @@ export {
 	LoginDialogComponent,
 	ModelSelectorComponent,
 	OAuthSelectorComponent,
+	PreviewPanel,
+	type PreviewPanelOptions,
 	type RenderDiffOptions,
 	rawKeyHint,
 	renderDiff,

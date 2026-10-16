@@ -16,13 +16,15 @@ Add `"$schema": "https://pi.dev/schemas/settings.schema.json"` to `settings.json
 | `modelThinkingLevels` | object | None | Per-model startup thinking levels keyed by exact `provider/modelId`. |
 | `thinkingBudgets` | object | Built-in budgets | Token budgets for `minimal`, `low`, `medium`, and `high` thinking levels. |
 | `enabledModels` | `string[]` | All available models | Model patterns used for startup selection and model cycling. Uses the same format as `--models`. |
-| `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in the transcript. |
+| `hideThinkingBlock` | boolean | `false` | Collapse thinking to one row with a source-line count and a short excerpt. |
 | `showCacheMissNotices` | boolean | `false` | Show notices for significant cache misses, successful cache warming, compaction usage, and provider recovery. |
 | `cacheWarming` | `"off" \| "streaming" \| "idle"` | `"streaming"` | Keep eligible provider prompt caches warm during active runs or, with `"idle"`, between runs. Global setting only. |
 
 Cache warming runs only when the model declares a cache lifetime and Pi estimates at least $0.05 in avoided cache-miss cost. Refresh usage counts toward session totals but does not enter model context. `/session` shows the next decision; extensions can override it with `cache_warming_decision`. See [Prompt Cache Lifetimes](models.md#prompt-cache-lifetimes).
 
 See [Choose a Model](models.md) for model selection and thinking controls.
+
+With `hideThinkingBlock: true`, each thinking run shows its first source line as a truncated excerpt. The count includes blank source lines, not terminal wrapping. In fullscreen mode, hover for a scrollable preview or click to expand; click expanded thinking to collapse it again. `Ctrl+T` (configurable as `app.thinking.toggle`) toggles all thinking blocks and resets individual overrides. Previews use the same hover delay as tool previews when Grok UI is active. Collapsed thinking is only rendered as Markdown when expanded or previewed; stored messages and model context are unchanged.
 
 ## Interaction
 

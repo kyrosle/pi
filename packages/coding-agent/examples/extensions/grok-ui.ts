@@ -6,6 +6,7 @@ import {
 	type ExtensionAPI,
 	getAgentDir,
 	type KeybindingsManager,
+	PreviewPanel,
 	parseSkillBlock,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
@@ -22,7 +23,6 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { PreviewPanel } from "./grok-ui/preview-panel.ts";
 import { grokToolRenderers } from "./grok-ui/tool-renderers.ts";
 
 function isHoverDelay(value: unknown): value is number {
@@ -247,7 +247,6 @@ export default function grokUi(pi: ExtensionAPI): void {
 		if (activeTui && isViewportTUI(activeTui)) {
 			activeTui.hideHoverPreview?.();
 			activeTui.setTimeline?.(undefined);
-			activeTui.setMouseHoverEnabled?.(false);
 			activeTui.setHoverPreviewDelay?.(0);
 		}
 		activeTui = undefined;
