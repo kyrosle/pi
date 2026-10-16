@@ -20,13 +20,13 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultEditorTheme } from "../../../tui/test/test-themes.ts";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal.ts";
-import { PreviewPanel } from "../../examples/extensions/grok-ui/preview-panel.ts";
 import grokUi, { GrokMenu } from "../../examples/extensions/grok-ui.ts";
 import type { ToolRenderContext, ToolRenderers } from "../../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
 import { createChatViewport } from "../../src/modes/interactive/chat-viewport.ts";
 import { AssistantMessageComponent } from "../../src/modes/interactive/components/assistant-message.ts";
 import { CustomEditor } from "../../src/modes/interactive/components/custom-editor.ts";
+import { PreviewPanel } from "../../src/modes/interactive/components/preview-panel.ts";
 import { WorkingStatusIndicator } from "../../src/modes/interactive/components/status-indicator.ts";
 import { ToolExecutionComponent } from "../../src/modes/interactive/components/tool-execution.ts";
 import { UserMessageComponent } from "../../src/modes/interactive/components/user-message.ts";

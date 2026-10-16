@@ -15,7 +15,7 @@ export interface PreviewPanelOptions {
 	onClick?: () => void;
 }
 
-/** A bounded preview that scrolls without changing the transcript or keyboard focus. */
+/** A bounded preview shared by thinking and tools, without changing transcript height or keyboard focus. */
 export class PreviewPanel implements Component {
 	private content: Component;
 	private options: PreviewPanelOptions;

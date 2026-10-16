@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added one-line thinking excerpts with source-line counts, fullscreen hover previews and individual click-to-expand behavior, retaining Markdown caches while collapsed
 - Added a Grok UI prototype extension with a conversation timeline, compact tool calls with hover previews, and a display-options overlay using Pi's fullscreen layout and extension APIs
 - Added a Models Configuration reference generated from the `models.json` schema, listing all provider, model, model override, and compatibility fields ([#10790](https://github.com/earendil-works/pi/issues/10790))
 
@@ -22,7 +23,7 @@
 - Changed Grok input to use the native editor's top and bottom horizontal rules, removing side borders and the duplicate model/thinking caption while retaining embedded working status
 - Changed Grok message headings to show the system username and each reply's recorded model ID, with one heading when the extension is loaded twice, and the Grok header to show the current model ID
 - Added the assistant message's model ID to Markdown transformer context
-- Moved Grok tool summaries and preview panels into the extension, retaining host support for pointer lifecycle and expanding individual tools
+- Moved Grok tool summaries into the extension and shared the preview panel with native thinking, retaining host support for pointer lifecycle and expanding individual tools
 - Moved complete tool-output archiving and bounded excerpts into a default built-in extension, using a validated context-budget hook while keeping request preflight and overflow recovery in the host
 - Changed Grok hover previews to wait two seconds by default, with `/grok-hover-delay` persisting an extension-owned delay setting
 - Changed the Grok UI prototype to distinguish user messages and replies with role headings and a blue-gray user background, while reducing emphasis on thinking and tool output
