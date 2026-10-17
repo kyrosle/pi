@@ -117,6 +117,7 @@ import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { getSourcePackageKey, type SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
+import { isThinkingViewMode, THINKING_VIEW_MODES, type ThinkingViewMode } from "../../core/thinking-view.ts";
 import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
@@ -522,7 +523,8 @@ export class InteractiveMode {
 	private toolOutputExpanded = false;
 
 	// Thinking block visibility state
-	private hideThinkingBlock = false;
+	private thinkingViewMode: ThinkingViewMode = "summary";
+	private uncollapsedThinkingView: ThinkingViewMode = "summary";
 	private outputPad = 1;
 	private readonly mermaidMarkdownTransformer: MarkdownTransformer = createMermaidMarkdownTransformer({
 		getMode: () => this.settingsManager.getMermaidRenderingMode(),
@@ -669,8 +671,8 @@ export class InteractiveMode {
 		this.footerContainer = new Container();
 		this.footerContainer.addChild(this.footer);
 
-		// Load hide thinking block setting
-		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+		// Load the thinking display mode.
+		this.thinkingViewMode = this.settingsManager.getThinkingViewMode();
 		this.outputPad = this.settingsManager.getOutputPad();
 
 		// Register themes from resource loader and initialize
@@ -779,6 +781,17 @@ export class InteractiveMode {
 					}),
 				);
 			};
+		}
+
+		const thinkingStepsCommand = slashCommands.find((command) => command.name === "thinking-steps");
+		if (thinkingStepsCommand) {
+			thinkingStepsCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null =>
+				createFuzzyAutocompleteItems(
+					[...THINKING_VIEW_MODES],
+					prefix,
+					(mode) => mode,
+					(mode) => ({ value: mode, label: mode }),
+				);
 		}
 
 		const loginCommand = slashCommands.find((command) => command.name === "login");
@@ -2179,7 +2192,7 @@ export class InteractiveMode {
 		this.footer.setSession(this.session);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
-		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+		this.thinkingViewMode = this.settingsManager.getThinkingViewMode();
 		this.outputPad = this.settingsManager.getOutputPad();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
 		const clearOnShrink = this.settingsManager.getClearOnShrink();
@@ -3178,6 +3191,11 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
 		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
+		this.defaultEditor.onAction("app.thinking.cycleView", () => {
+			this.setThinkingViewMode(
+				THINKING_VIEW_MODES[(THINKING_VIEW_MODES.indexOf(this.thinkingViewMode) + 1) % THINKING_VIEW_MODES.length],
+			);
+		});
 		this.defaultEditor.onAction("app.editor.external", () => void this.handleOpenExternalEditor());
 		this.defaultEditor.onAction(
 			"app.message.copy",
@@ -3272,6 +3290,16 @@ export class InteractiveMode {
 			if (!text) return;
 
 			// Handle commands
+			if (text === "/thinking-steps" || text.startsWith("/thinking-steps ")) {
+				this.editor.setText("");
+				const mode =
+					text.slice("/thinking-steps".length).trim() ||
+					(await this.showExtensionSelector("Thinking view", [...THINKING_VIEW_MODES]));
+				if (mode === undefined) return;
+				if (isThinkingViewMode(mode)) this.setThinkingViewMode(mode);
+				else this.showError("Usage: /thinking-steps collapsed|summary|expanded");
+				return;
+			}
 			if (text === "/settings") {
 				this.showSettingsSelector();
 				this.editor.setText("");
@@ -3578,7 +3606,7 @@ export class InteractiveMode {
 				} else if (event.message.role === "assistant") {
 					this.streamingComponent = new AssistantMessageComponent(
 						undefined,
-						this.hideThinkingBlock,
+						this.thinkingViewMode,
 						this.getMarkdownThemeWithSettings(),
 						this.hiddenThinkingLabel,
 						this.outputPad,
@@ -4059,7 +4087,7 @@ export class InteractiveMode {
 			case "assistant": {
 				const assistantComponent = new AssistantMessageComponent(
 					message,
-					this.hideThinkingBlock,
+					this.thinkingViewMode,
 					this.getMarkdownThemeWithSettings(),
 					this.hiddenThinkingLabel,
 					this.outputPad,
@@ -4687,17 +4715,22 @@ export class InteractiveMode {
 	private updateThinkingBlockVisibility(): void {
 		for (const child of this.chatContainer.children) {
 			if (child instanceof AssistantMessageComponent) {
-				child.setHideThinkingBlock(this.hideThinkingBlock);
+				child.setThinkingViewMode(this.thinkingViewMode);
 			}
 		}
 		this.ui.requestRender();
 	}
 
 	private toggleThinkingBlockVisibility(): void {
-		this.hideThinkingBlock = !this.hideThinkingBlock;
-		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
+		this.setThinkingViewMode(this.thinkingViewMode === "collapsed" ? this.uncollapsedThinkingView : "collapsed");
+	}
+
+	private setThinkingViewMode(mode: ThinkingViewMode): void {
+		if (this.thinkingViewMode !== "collapsed") this.uncollapsedThinkingView = this.thinkingViewMode;
+		this.thinkingViewMode = mode;
+		this.settingsManager.setThinkingViewMode(mode);
 		this.updateThinkingBlockVisibility();
-		this.showStatus(`Thinking blocks: ${this.hideThinkingBlock ? "hidden" : "visible"}`);
+		this.showStatus(`Thinking view: ${mode}`);
 	}
 
 	private async handleOpenExternalEditor(): Promise<void> {
@@ -5042,7 +5075,7 @@ export class InteractiveMode {
 					currentTheme: this.themeController.getThemeSelection() || SYSTEM_THEME_NAME,
 					terminalTheme: this.themeController.getTerminalTheme(),
 					availableThemes: getAvailableThemes(),
-					hideThinkingBlock: this.hideThinkingBlock,
+					thinkingViewMode: this.thinkingViewMode,
 					mermaidRenderingMode: this.settingsManager.getMermaidRenderingMode(),
 					collapseChangelog: this.settingsManager.getCollapseChangelog(),
 					enableInstallTelemetry: this.settingsManager.getEnableInstallTelemetry(),
@@ -5143,11 +5176,7 @@ export class InteractiveMode {
 						this.themeController.setThemeSetting(themeSetting);
 					},
 					onThemePreview: (themeName) => this.themeController.preview(themeName),
-					onHideThinkingBlockChange: (hidden) => {
-						this.hideThinkingBlock = hidden;
-						this.settingsManager.setHideThinkingBlock(hidden);
-						this.updateThinkingBlockVisibility();
-					},
+					onThinkingViewModeChange: (mode) => this.setThinkingViewMode(mode),
 					onMermaidRenderingModeChange: (mode) => {
 						this.settingsManager.setMermaidRenderingMode(mode);
 						this.chatContainer.invalidate();
@@ -6584,7 +6613,7 @@ export class InteractiveMode {
 			if (chatRestoredBeforeSessionStart) {
 				return;
 			}
-			this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+			this.thinkingViewMode = this.settingsManager.getThinkingViewMode();
 			this.outputPad = this.settingsManager.getOutputPad();
 			this.rebuildChatFromMessages();
 			chatRestoredBeforeSessionStart = true;
@@ -6954,6 +6983,7 @@ export class InteractiveMode {
 		const selectModel = this.getAppKeyDisplay("app.model.select");
 		const expandTools = this.getAppKeyDisplay("app.tools.expand");
 		const toggleThinking = this.getAppKeyDisplay("app.thinking.toggle");
+		const cycleThinkingView = this.getAppKeyDisplay("app.thinking.cycleView");
 		const externalEditor = this.getAppKeyDisplay("app.editor.external");
 		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
 		const copyMessage = this.getAppKeyDisplay("app.message.copy");
@@ -6999,6 +7029,7 @@ export class InteractiveMode {
 | \`${selectModel}\` | Open model selector |
 | \`${expandTools}\` | Toggle tool output expansion |
 | \`${toggleThinking}\` | Toggle thinking block visibility |
+| \`${cycleThinkingView}\` | Cycle thinking view: collapsed, summary, expanded |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy selection or last assistant message |
 | \`${followUp}\` | Queue follow-up message |

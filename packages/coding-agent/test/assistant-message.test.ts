@@ -35,6 +35,37 @@ function createAssistantMessage(
 }
 
 describe("AssistantMessageComponent", () => {
+	test.each(["collapsed", "summary", "expanded"] as const)(
+		"reuses %s history without walking its children and refreshes on content, width, and theme changes",
+		(mode) => {
+			initTheme("dark");
+			const message = createAssistantMessage([
+				{ type: "thinking", thinking: "Inspect the cache\n\nVerify the result" },
+				{ type: "text", text: "Answer" },
+			]);
+			const component = new AssistantMessageComponent(message, mode);
+			const childRender = vi.spyOn(component.children[0], "render");
+			const first = component.render(80);
+			for (let frame = 0; frame < 20; frame++) expect(component.render(80)).toBe(first);
+			expect(childRender).toHaveBeenCalledTimes(1);
+			expect(first.join("").split(OSC133_ZONE_START)).toHaveLength(2);
+
+			component.render(40);
+			expect(childRender).toHaveBeenCalledTimes(2);
+			component.invalidate();
+			component.render(40);
+			expect(childRender).toHaveBeenCalledTimes(3);
+			message.content.push({ type: "text", text: "Updated answer" });
+			component.updateContent(message, false);
+			expect(stripAnsi(component.render(40).join("\n"))).toContain("Updated answer");
+			expect(childRender).toHaveBeenCalledTimes(4);
+			component.setThinkingViewMode(mode === "expanded" ? "summary" : "expanded");
+			component.render(40);
+			expect(childRender).toHaveBeenCalledTimes(5);
+			childRender.mockRestore();
+		},
+	);
+
 	test("adds OSC 133 zone markers to assistant messages without tool calls", () => {
 		initTheme("dark");
 
@@ -71,7 +102,7 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = component.render(80).join("\n");
 
-		expect(rendered).toContain("Thinking...");
+		expect(rendered).toContain("Thinking Steps");
 		expect(rendered).toContain("Response was truncated before completion.");
 	});
 
@@ -89,7 +120,7 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = stripAnsi(component.render(80).join("\n"));
 
-		expect(rendered.match(/Thinking\.\.\./g)).toHaveLength(1);
+		expect(rendered.match(/Thinking Steps/g)).toHaveLength(1);
 		expect(rendered).toContain("answer");
 	});
 
@@ -143,6 +174,7 @@ describe("AssistantMessageComponent", () => {
 				{ type: "text", text: "answer" },
 				{ type: "thinking", thinking: "second reasoning" },
 			]),
+			"expanded",
 		);
 		const width = 80;
 		const lines = component.render(width);
@@ -165,9 +197,9 @@ describe("AssistantMessageComponent", () => {
 		expect(component.handleMouse(event)?.handled).toBe(true);
 
 		const collapsed = stripAnsi(component.render(width).join("\n"));
-		expect(collapsed).toContain("▸ Thinking... · 1 line");
-		expect(collapsed).toContain("1. first reasoning");
-		expect(collapsed).toContain("Thinking...");
+		expect(collapsed).toContain("Thinking Steps · Summary · 1 step");
+		expect(collapsed).toContain("1. reasoning: first reasoning");
+		expect(collapsed).toContain("Thinking Steps · Expanded");
 		expect(collapsed).toContain("second reasoning");
 	});
 
@@ -192,37 +224,50 @@ describe("AssistantMessageComponent", () => {
 			);
 			for (const width of [1, 4, 12, 24, 80]) {
 				const lines = component.render(width).map(stripAnsi);
-				expect(lines).toHaveLength(3);
+				expect(lines).toHaveLength(2);
 				expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
 				expect(lines.join("")).not.toMatch(/[\r\t\x1b]/);
 			}
-			expect(stripAnsi(component.render(100)[1])).toContain(`${size + 2} lines`);
-			expect(stripAnsi(component.render(100)[2])).toContain("1. 中文");
+			expect(stripAnsi(component.render(100)[1])).toContain("reasoning: 中文");
 		}
 		expect(transforms).toBe(0);
 	});
 
-	test("caps streamed summaries at three steps and preserves their height on completion and restore", () => {
+	test("caps streamed summaries at five salient steps and preserves their height on completion and restore", () => {
 		initTheme("dark");
-		const component = new AssistantMessageComponent(undefined, true);
-		const blocks = ["# Inspect", "- Check paths", "- Run tests", "Not verified yet", "Review the result"];
+		const component = new AssistantMessageComponent(undefined, "summary");
+		const blocks = [
+			"Inspect",
+			"Failed to open file",
+			"Decided to retry",
+			"Read config",
+			"Write output",
+			"Run tests",
+			"Next task",
+		];
 		for (let count = 1; count <= blocks.length; count++) {
 			const message = createAssistantMessage([{ type: "thinking", thinking: blocks.slice(0, count).join("\n\n") }]);
 			const original = structuredClone(message);
 			component.updateContent(message, true);
 			const streaming = component.render(80);
-			expect(streaming).toHaveLength(2 + Math.min(count, 3));
+			expect(streaming).toHaveLength(2 + Math.min(count, 5));
 			component.updateContent(message, false);
 			expect(component.render(80)).toEqual(streaming);
-			expect(component.render(80)).toEqual(new AssistantMessageComponent(message, true).render(80));
+			expect(component.render(80)).toEqual(new AssistantMessageComponent(message, "summary").render(80));
 			expect(message).toEqual(original);
 		}
 		const lines = component.render(80).map(stripAnsi);
-		expect(lines.slice(2)).toEqual(["   3. Run tests", "   4. Not verified yet", "   5. Review the result"]);
+		expect(lines.slice(2)).toEqual([
+			" ├─ 1. inspect: Inspect",
+			" ├─ 2. failure: Failed to open file",
+			" ├─ 3. decision: Decided to retry",
+			" ├─ 6. verify: Run tests",
+			" └─ 7. plan: Next task",
+		]);
 		component.setOutputPad(0);
-		expect(stripAnsi(component.render(80)[2])).toBe("  3. Run tests");
+		expect(stripAnsi(component.render(80)[2])).toBe("├─ 1. inspect: Inspect");
 		component.invalidate();
-		expect(component.render(20)).toHaveLength(5);
+		expect(component.render(20)).toHaveLength(7);
 		expect(component.render(20).every((line) => visibleWidth(line) <= 20)).toBe(true);
 	});
 
@@ -255,81 +300,87 @@ describe("AssistantMessageComponent", () => {
 		expect(highlights).toBe(1);
 	});
 
-	test("keeps the transcript viewport anchored while capped thinking steps stream below it", async () => {
-		initTheme("dark");
-		const terminal = new VirtualTerminal(60, 16);
-		const tui = new TuiAltScreen(terminal);
-		const component = new AssistantMessageComponent(undefined, true, undefined, "Thinking...", 1, [], tui);
-		const thinking = "First\n\nSecond\n\nThird";
-		component.updateContent(createAssistantMessage([{ type: "thinking", thinking }]), true);
-		tui.addChild(new Text(Array.from({ length: 60 }, (_, index) => `history ${index}`).join("\n"), 0, 0));
-		tui.addChild(component);
-		tui.start();
-		try {
-			await terminal.waitForRender();
-			tui.scrollBy(-20);
-			await terminal.waitForRender();
-			const top = tui.viewportTop;
-			const viewport = terminal.getViewport();
-			for (const isStreaming of [true, false]) {
+	test.each(["collapsed", "summary", "expanded"] as const)(
+		"keeps the transcript viewport anchored while %s thinking streams below it",
+		async (mode) => {
+			initTheme("dark");
+			const terminal = new VirtualTerminal(60, 16);
+			const tui = new TuiAltScreen(terminal);
+			const component = new AssistantMessageComponent(undefined, mode, undefined, "Thinking...", 1, [], tui);
+			const thinking = "First\n\nSecond\n\nThird";
+			component.updateContent(createAssistantMessage([{ type: "thinking", thinking }]), true);
+			tui.addChild(new Text(Array.from({ length: 60 }, (_, index) => `history ${index}`).join("\n"), 0, 0));
+			tui.addChild(component);
+			tui.start();
+			try {
+				await terminal.waitForRender();
+				tui.scrollBy(-20);
+				await terminal.waitForRender();
+				const top = tui.viewportTop;
+				const viewport = terminal.getViewport();
+				for (const isStreaming of [true, false]) {
+					component.updateContent(
+						createAssistantMessage([{ type: "thinking", thinking: `${thinking}\n\nFourth\n\nFifth` }]),
+						isStreaming,
+					);
+					tui.renderNow();
+					await terminal.flush();
+					expect(tui.isFollowingOutput).toBe(false);
+					expect(tui.viewportTop).toBe(top);
+					expect(terminal.getViewport()).toEqual(viewport);
+				}
+			} finally {
+				tui.stop();
+			}
+		},
+	);
+
+	test.each(["collapsed", "summary"] as const)(
+		"previews %s thinking, scrolls independently, expands on click and respects the global mode",
+		async (mode) => {
+			initTheme("dark");
+			const terminal = new VirtualTerminal(100, 30);
+			const tui = new TuiAltScreen(terminal);
+			tui.setMouseHoverEnabled(true);
+			const component = new AssistantMessageComponent(undefined, mode, undefined, "Thinking...", 1, [], tui);
+			const thinking = Array.from({ length: 60 }, (_, i) => `reasoning ${i}`).join("\n");
+			component.updateContent(createAssistantMessage([{ type: "thinking", thinking }]), true);
+			tui.addChild(component);
+			tui.start();
+			try {
+				await terminal.waitForRender();
+				const row = terminal.getViewport().findIndex((line) => line.includes("Thinking Steps")) + 1;
+				expect(row).toBeGreaterThan(0);
+				terminal.sendInput(`\x1b[<35;5;${row}M`);
+				await terminal.waitForRender();
+				expect(tui.hasOverlay()).toBe(true);
+				expect(terminal.getViewport().join("\n")).toContain("reasoning 1");
+				const inline = component.render(100);
+				const panelRow = terminal.getViewport().findIndex((line) => line.includes("wheel to scroll")) + 1;
+				terminal.sendInput(`\x1b[<65;10;${panelRow}M`);
+				await terminal.waitForRender();
+				expect(component.render(100)).toEqual(inline);
+				expect(terminal.getViewport().join("\n")).not.toMatch(/│\s+reasoning 0\s+│/);
 				component.updateContent(
-					createAssistantMessage([{ type: "thinking", thinking: `${thinking}\n\nFourth\n\nFifth` }]),
-					isStreaming,
+					createAssistantMessage([{ type: "thinking", thinking: `${thinking}\nnew tail` }]),
+					false,
 				);
 				tui.renderNow();
 				await terminal.flush();
-				expect(tui.isFollowingOutput).toBe(false);
-				expect(tui.viewportTop).toBe(top);
-				expect(terminal.getViewport()).toEqual(viewport);
+				expect(tui.hasOverlay()).toBe(true);
+				expect(terminal.getViewport().join("\n")).toContain("/61");
+				terminal.sendInput(`\x1b[<0;10;${panelRow}M`);
+				terminal.sendInput(`\x1b[<0;10;${panelRow}m`);
+				await terminal.waitForRender();
+				expect(tui.hasOverlay()).toBe(false);
+				expect(stripAnsi(component.render(100).join("\n"))).toContain("new tail");
+				component.setHideThinkingBlock(true);
+				expect(component.render(100)).toHaveLength(2);
+			} finally {
+				tui.stop();
 			}
-		} finally {
-			tui.stop();
-		}
-	});
-
-	test("previews current streamed thinking, scrolls independently, expands on click and respects the global toggle", async () => {
-		initTheme("dark");
-		const terminal = new VirtualTerminal(100, 30);
-		const tui = new TuiAltScreen(terminal);
-		tui.setMouseHoverEnabled(true);
-		const component = new AssistantMessageComponent(undefined, true, undefined, "Thinking...", 1, [], tui);
-		const thinking = Array.from({ length: 60 }, (_, i) => `reasoning ${i}`).join("\n");
-		component.updateContent(createAssistantMessage([{ type: "thinking", thinking }]), true);
-		tui.addChild(component);
-		tui.start();
-		try {
-			await terminal.waitForRender();
-			const row = terminal.getViewport().findIndex((line) => line.includes("Thinking...")) + 1;
-			expect(row).toBeGreaterThan(0);
-			terminal.sendInput(`\x1b[<35;5;${row}M`);
-			await terminal.waitForRender();
-			expect(tui.hasOverlay()).toBe(true);
-			expect(terminal.getViewport().join("\n")).toContain("reasoning 1");
-			const inline = component.render(100);
-			const panelRow = terminal.getViewport().findIndex((line) => line.includes("wheel to scroll")) + 1;
-			terminal.sendInput(`\x1b[<65;10;${panelRow}M`);
-			await terminal.waitForRender();
-			expect(component.render(100)).toEqual(inline);
-			expect(terminal.getViewport().join("\n")).not.toMatch(/│\s+reasoning 0\s+│/);
-			component.updateContent(
-				createAssistantMessage([{ type: "thinking", thinking: `${thinking}\nnew tail` }]),
-				false,
-			);
-			tui.renderNow();
-			await terminal.flush();
-			expect(tui.hasOverlay()).toBe(true);
-			expect(terminal.getViewport().join("\n")).toContain("/61");
-			terminal.sendInput(`\x1b[<0;10;${panelRow}M`);
-			terminal.sendInput(`\x1b[<0;10;${panelRow}m`);
-			await terminal.waitForRender();
-			expect(tui.hasOverlay()).toBe(false);
-			expect(stripAnsi(component.render(100).join("\n"))).toContain("new tail");
-			component.setHideThinkingBlock(true);
-			expect(component.render(100)).toHaveLength(3);
-		} finally {
-			tui.stop();
-		}
-	});
+		},
+	);
 
 	test("keeps the hover delay across streamed updates and dismisses previews when thinking is removed", () => {
 		initTheme("dark");
@@ -667,8 +718,11 @@ describe("AssistantMessageComponent", () => {
 		revision++;
 		component.updateContent(message, true);
 		expect(stripAnsi(component.render(60).join("\n"))).toContain("gpt-4o-mini:1:answer");
+		revision++;
+		component.updateContent(message, true);
+		expect(stripAnsi(component.render(60).join("\n"))).toContain("gpt-4o-mini:2:answer");
 		message.model = "fixture-model";
 		component.updateContent(message, true);
-		expect(stripAnsi(component.render(60).join("\n"))).toContain("fixture-model:1:answer");
+		expect(stripAnsi(component.render(60).join("\n"))).toContain("fixture-model:2:answer");
 	});
 });

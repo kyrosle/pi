@@ -13,10 +13,11 @@ import {
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
 import type { MarkdownTransformContext, MarkdownTransformer } from "../../../core/extensions/types.ts";
+import type { ThinkingViewMode } from "../../../core/thinking-view.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 import { PreviewPanel } from "./preview-panel.ts";
-import { ThinkingSummary } from "./thinking-summary.ts";
+import { selectThinkingSteps, ThinkingSummary } from "./thinking-summary.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -25,6 +26,8 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 /** A Markdown component kept for one content position, with the settings its transform captured. */
 interface MarkdownRecord {
 	config: string;
+	text: string;
+	streaming: boolean;
 	markdown: Markdown;
 }
 
@@ -33,7 +36,7 @@ interface MarkdownRecord {
  */
 export class AssistantMessageComponent extends Container {
 	private contentContainer: Container;
-	private hideThinkingBlock: boolean;
+	private thinkingViewMode: ThinkingViewMode;
 	private markdownTheme: MarkdownTheme;
 	private hiddenThinkingLabel: string;
 	private outputPad: number;
@@ -45,14 +48,15 @@ export class AssistantMessageComponent extends Container {
 	private timestamp?: string;
 	private tui?: TUI;
 	private previewMarkdown?: Markdown;
-	private thinkingVisibilityOverrides = new Map<number, boolean>();
+	private thinkingVisibilityOverrides = new Map<number, ThinkingViewMode>();
 	// Keyed by content position, so a streamed update reuses the Markdown (and its block cache) instead of rebuilding it.
 	private markdownRecords = new Map<string, MarkdownRecord>();
 	private thinkingSummaries = new Map<number, ThinkingSummary>();
+	private cachedRender?: { width: number; lines: string[] };
 
 	constructor(
 		message?: AssistantMessage,
-		hideThinkingBlock = false,
+		thinkingViewMode: ThinkingViewMode | boolean = "summary",
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
 		hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
@@ -63,7 +67,8 @@ export class AssistantMessageComponent extends Container {
 	) {
 		super();
 
-		this.hideThinkingBlock = hideThinkingBlock;
+		this.thinkingViewMode =
+			typeof thinkingViewMode === "boolean" ? (thinkingViewMode ? "collapsed" : "expanded") : thinkingViewMode;
 		this.markdownTheme = markdownTheme;
 		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.outputPad = outputPad;
@@ -82,6 +87,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override invalidate(): void {
+		this.cachedRender = undefined;
 		super.invalidate();
 		// Theme and highlighter state may have changed, so rebuild every Markdown instead of reusing it.
 		this.markdownRecords.clear();
@@ -91,8 +97,12 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	setHideThinkingBlock(hide: boolean): void {
+		this.setThinkingViewMode(hide ? "collapsed" : "expanded");
+	}
+
+	setThinkingViewMode(mode: ThinkingViewMode): void {
 		this.dismissThinkingPreview();
-		this.hideThinkingBlock = hide;
+		this.thinkingViewMode = mode;
 		this.thinkingVisibilityOverrides.clear();
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
@@ -114,17 +124,19 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
+		// Scrolling unchanged history must not walk its Markdown and thinking subtrees again.
+		if (this.cachedRender?.width === width) return this.cachedRender.lines;
 		const lines = super.render(width);
-		if (this.hasToolCalls || lines.length === 0) {
-			return lines;
+		if (!this.hasToolCalls && lines.length > 0) {
+			lines[0] = OSC133_ZONE_START + lines[0];
+			lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
 		}
-
-		lines[0] = OSC133_ZONE_START + lines[0];
-		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
+		this.cachedRender = { width, lines };
 		return lines;
 	}
 
 	updateContent(message: AssistantMessage, isStreaming = this.isStreaming): void {
+		this.cachedRender = undefined;
 		this.lastMessage = message;
 		this.isStreaming = isStreaming;
 
@@ -177,9 +189,9 @@ export class AssistantMessageComponent extends Container {
 				}
 
 				const runIndex = thinkingRunIndex++;
-				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
+				const mode = this.thinkingVisibilityOverrides.get(runIndex) ?? this.thinkingViewMode;
 				// A hidden run with an empty label renders nothing, including no spacing.
-				if (hidden && !this.hiddenThinkingLabel.trim()) {
+				if (mode === "collapsed" && !this.hiddenThinkingLabel.trim()) {
 					continue;
 				}
 				const thinking = thinkingBlocks.join("\n\n");
@@ -194,35 +206,94 @@ export class AssistantMessageComponent extends Container {
 				);
 				const summary = previousSummaries.get(runStart) ?? new ThinkingSummary();
 				this.thinkingSummaries.set(runStart, summary);
-				const { lineCount, stepCount, steps } = summary.update(thinking);
-				const label = `▸ ${this.hiddenThinkingLabel} · ${lineCount} ${lineCount === 1 ? "line" : "lines"}`;
-				const thinkingComponent = hidden
-					? {
-							render: (width: number) => [
-								theme.fg("muted", truncateToWidth(" ".repeat(this.outputPad) + label, width)),
-								...steps.map((step, index) =>
-									theme.fg(
-										"thinkingText",
-										truncateToWidth(
-											`${" ".repeat(this.outputPad)}  ${stepCount - steps.length + index + 1}. ${step}`,
-											width,
-										),
-									),
+				const steps = summary.update(thinking);
+				const selected = selectThinkingSteps(steps);
+				const label = this.hiddenThinkingLabel === "Thinking..." ? "Thinking Steps" : this.hiddenThinkingLabel;
+				// Retain per-step Markdown across mode changes, but render it only in expanded mode.
+				const details =
+					mode === "expanded"
+						? steps.map((step) =>
+								this.acquireMarkdown(
+									previousRecords,
+									`thinking-step:${runStart}:${step.start}`,
+									thinking.slice(step.start, step.end).trim(),
+									"assistant-thinking",
+									message.model,
+									{ color: (text: string) => theme.fg("thinkingText", text) },
 								),
-							],
-							invalidate() {},
+							)
+						: [];
+				if (mode !== "expanded") {
+					for (const [key, record] of previousRecords) {
+						if (key.startsWith(`thinking-step:${runStart}:`)) this.markdownRecords.set(key, record);
+					}
+				}
+				const thinkingComponent = {
+					render: (width: number): string[] => {
+						const pad = " ".repeat(this.outputPad);
+						const row = (text: string) => theme.fg("thinkingText", truncateToWidth(pad + text, width));
+						if (mode === "collapsed") {
+							const active = steps.at(-1);
+							return [
+								row(`▸ ${label} · ${active ? `${active.role}: ${active.summary}` : "Reasoning unavailable"}`),
+							];
 						}
-					: markdown;
+						const lines = [
+							theme.fg(
+								"muted",
+								truncateToWidth(
+									`${pad}┆ ${label} · ${mode === "summary" ? "Summary" : "Expanded"} · ${steps.length} ${steps.length === 1 ? "step" : "steps"}`,
+									width,
+								),
+							),
+						];
+						if (mode === "summary") {
+							for (const [index, step] of selected.entries()) {
+								lines.push(
+									row(
+										`${index === selected.length - 1 ? "└─" : "├─"} ${steps.indexOf(step) + 1}. ${step.role}: ${step.summary}`,
+									),
+								);
+							}
+						} else if (details.length === 0) {
+							lines.push(...markdown.render(width));
+						} else {
+							for (const [index, detail] of details.entries()) {
+								lines.push(
+									row(`${index === details.length - 1 ? "└─" : "├─"} ${index + 1}. ${steps[index].role}`),
+								);
+								lines.push(...detail.render(width));
+							}
+						}
+						return lines;
+					},
+					invalidate: () => {
+						for (const detail of details) detail.invalidate();
+					},
+				};
 				const toggle = () => {
 					this.dismissThinkingPreview();
-					this.thinkingVisibilityOverrides.set(runIndex, !hidden);
+					this.thinkingVisibilityOverrides.set(
+						runIndex,
+						mode === "expanded"
+							? this.thinkingViewMode === "expanded"
+								? "summary"
+								: this.thinkingViewMode
+							: "expanded",
+					);
 					if (this.lastMessage) this.updateContent(this.lastMessage);
 					this.tui?.requestRender();
 				};
 				addVisibleChild(
 					new MouseRegion(thinkingComponent, (event) => {
 						const tui = this.tui;
-						if (hidden && event.type === "move" && event.button === "none" && tui && isViewportTUI(tui)) {
+						if (
+							mode !== "expanded" &&
+							event.type === "move" &&
+							event.button === "none" &&
+							tui &&
+							isViewportTUI(tui)
+						) {
 							this.previewMarkdown = markdown;
 							tui.showHoverPreview?.(
 								markdown,
@@ -301,8 +372,9 @@ export class AssistantMessageComponent extends Container {
 		let markdown: Markdown;
 		if (record?.config === config) {
 			markdown = record.markdown;
-			// setText always clears the full-output cache, so the transform runs again even for identical text.
-			markdown.setText(text);
+			// Only completed step bodies skip transforms; text and full previews retain their refresh behavior.
+			if (!key.startsWith("thinking-step:") || record.text !== text || record.streaming !== this.isStreaming)
+				markdown.setText(text);
 		} else {
 			markdown = new Markdown(text, this.outputPad, 0, this.markdownTheme, defaultTextStyle, {
 				// Ending a stream must rerun transformers without discarding unchanged block layouts.
@@ -317,7 +389,7 @@ export class AssistantMessageComponent extends Container {
 					)(source, width),
 			});
 		}
-		this.markdownRecords.set(key, { config, markdown });
+		this.markdownRecords.set(key, { config, text, streaming: this.isStreaming, markdown });
 		return markdown;
 	}
 }

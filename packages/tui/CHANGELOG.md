@@ -21,6 +21,7 @@
 - Fixed `ProcessTerminal.setTitle()` writing control characters from the title, which could end the title sequence and send the rest to the terminal as escape sequences
 - Fixed display math wider than the content width being wrapped row by row, which split fractions and sums apart. It now falls back to the raw LaTeX source ([#11483](https://github.com/earendil-works/pi/issues/11483))
 - Fixed `tui.select.pageUp` and `tui.select.pageDown` being ignored by `SelectList`, `SettingsList`, and editor autocomplete ([#7629](https://github.com/earendil-works/pi/issues/7629), based on [#7680](https://github.com/earendil-works/pi/pull/7680) by [@muyiyr](https://github.com/muyiyr))
+- Reduced fullscreen scrolling work by directly painting text beside reserved scrollbar columns without repeatedly slicing and compositing each row
 - Fixed native Kitty image rows interrupting hover previews and overlays; image data and placement survive text compositing, and overlapping images temporarily draw below overlay backgrounds
 
 ## [1.4.0] - 2026-10-21

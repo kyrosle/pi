@@ -344,6 +344,38 @@ describe("viewport layout", () => {
 		assert.strictEqual(scrollView.isScrollbarVisible, false);
 	});
 
+	it("keeps reserved scrollbar and timeline gutters clear of content styles and hyperlinks", () => {
+		const content = {
+			render: () => Array.from({ length: 8 }, () => "\x1b[42m\x1b]8;;https://example.com\x07界e\u0301"),
+			invalidate: () => {},
+		};
+		const scroll = new ScrollView(content, {
+			scrollbar: "always",
+			scrollbarThumbStyle: (text) => text,
+			scrollbarTrackStyle: (text) => text,
+		});
+		scroll.setRightGutterWidth(2);
+		const render = () => renderLayoutFrame(scroll, 10, 4, () => {}).lines;
+		assert.deepStrictEqual(visibleLines(render()), ["界é    ┃", "界é    ┃", "界é    │", "界é    │"]);
+		for (const line of render()) assert.match(line, /\x1b\[0m\x1b\]8;;\x07[┃│]$/);
+		scroll.scrollBy(2);
+		scroll.setScrollbarActive(true);
+		assert.deepStrictEqual(visibleLines(render()), ["界é    │", "界é    █", "界é    █", "界é    │"]);
+	});
+
+	it("clips overwide content before a reserved scrollbar and preserves adjacent panes", () => {
+		const scroll = new ScrollView(
+			{ render: () => ["1234界overflow"], invalidate: () => {} },
+			{ scrollbar: "always" },
+		);
+		const root = new HStack([
+			{ component: scroll, basis: 6, shrink: 0 },
+			{ component: new Text("right", 0, 0), basis: 5, shrink: 0 },
+		]);
+		const frame = renderLayoutFrame(root, 11, 1, () => {});
+		assert.deepStrictEqual(visibleLines(frame.lines), ["1234 ┃right"]);
+	});
+
 	it("measures nested scroll content from constrained child geometry", () => {
 		const inner = new ScrollView(new Text("1\n2\n3\n4\n5\n6", 0, 0));
 		const outer = new ScrollView(new VStack([{ component: inner, basis: 2 }, new Text("tail", 0, 0)]));
