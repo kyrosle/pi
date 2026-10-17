@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Reduced fullscreen scrolling work by directly painting text beside reserved scrollbar columns without repeatedly slicing and compositing each row
 - Fixed native Kitty image rows interrupting hover previews and overlays; image data and placement survive text compositing, and overlapping images temporarily draw below overlay backgrounds
 
 ## [1.4.0] - 2026-10-21

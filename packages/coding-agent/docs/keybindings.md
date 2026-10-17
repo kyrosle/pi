@@ -155,7 +155,8 @@ On native Windows, `app.suspend` has no default because Windows terminals do not
 | `app.models.save` | `ctrl+s` | Save the selected default model or scoped model configuration to settings |
 | `app.thinking.cycle` | `shift+tab` | Cycle thinking level |
 | `app.thinking.save` | `ctrl+s` | Save current thinking level to settings |
-| `app.thinking.toggle` | `ctrl+t` | Collapse or expand thinking blocks |
+| `app.thinking.toggle` | `ctrl+t` | Toggle collapsed thinking and the last non-collapsed view |
+| `app.thinking.cycleView` | `alt+t` | Cycle collapsed, summary, and expanded thinking views |
 
 ### Display and Message Queue
 

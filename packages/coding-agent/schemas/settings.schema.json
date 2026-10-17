@@ -203,6 +203,24 @@
       "type": "boolean",
       "default": false
     },
+    "thinkingViewMode": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "collapsed"
+        },
+        {
+          "type": "string",
+          "const": "summary"
+        },
+        {
+          "type": "string",
+          "const": "expanded"
+        }
+      ],
+      "description": "Native thinking display: current step, salient steps, or full steps. Takes precedence over hideThinkingBlock.",
+      "default": "summary"
+    },
     "showCacheMissNotices": {
       "type": "boolean",
       "description": "Show cache cost and provider recovery notices.",

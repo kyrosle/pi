@@ -254,6 +254,13 @@ function replaceScrollbarCell(
 	preserveTargetBackground: boolean,
 ): string {
 	if (isImageLine(line)) return line;
+	// A reserved scrollbar column follows the content, so no grapheme needs replacing.
+	if (!preserveTargetBackground) {
+		const width = visibleWidth(line);
+		if (width <= column) {
+			return `${line}${" ".repeat(column - width)}\x1b[0m\x1b]8;;\x07${replacement}`;
+		}
+	}
 
 	const graphemeRange = getGraphemeCellRange(line, column);
 	const start = graphemeRange?.start ?? column;
@@ -349,6 +356,9 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 			// width clamp still truncates over-wide lines.
 			if (box.rect.x === 0 && box.rect.width >= totalWidth && (isImageLine(line) || !screen[row])) {
 				screen[row] = line;
+			} else if (box.rect.x === 0 && !screen[row] && !isImageLine(line) && visibleWidth(line) <= box.rect.width) {
+				// Leave reserved scrollbar/timeline columns empty instead of slicing the entire row.
+				screen[row] = `${line}${" ".repeat(box.rect.width - visibleWidth(line))}\x1b[0m\x1b]8;;\x07`;
 			} else {
 				screen[row] = compositeTuiLine(screen[row] ?? "", line, box.rect.x, box.rect.width, totalWidth);
 			}

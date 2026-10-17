@@ -16,7 +16,8 @@ Add `"$schema": "https://pi.dev/schemas/settings.schema.json"` to `settings.json
 | `modelThinkingLevels` | object | None | Per-model startup thinking levels keyed by exact `provider/modelId`. |
 | `thinkingBudgets` | object | Built-in budgets | Token budgets for `minimal`, `low`, `medium`, and `high` thinking levels. |
 | `enabledModels` | `string[]` | All available models | Model patterns used for startup selection and model cycling. Uses the same format as `--models`. |
-| `hideThinkingBlock` | boolean | `false` | Collapse thinking to one row with a source-line count and a short excerpt. |
+| `thinkingViewMode` | `"collapsed" \| "summary" \| "expanded"` | `"summary"` | Native Thinking Steps display mode. Takes precedence over `hideThinkingBlock`. |
+| `hideThinkingBlock` | boolean | `false` | When `thinkingViewMode` is unset, `true` selects collapsed mode. |
 | `showCacheMissNotices` | boolean | `false` | Show notices for significant cache misses, successful cache warming, compaction usage, and provider recovery. |
 | `cacheWarming` | `"off" \| "streaming" \| "idle"` | `"streaming"` | Keep eligible provider prompt caches warm during active runs or, with `"idle"`, between runs. Global setting only. |
 
@@ -24,7 +25,15 @@ Cache warming runs only when the model declares a cache lifetime and Pi estimate
 
 See [Choose a Model](models.md) for model selection and thinking controls.
 
-With `hideThinkingBlock: true`, each thinking run shows its first source line as a truncated excerpt. The count includes blank source lines, not terminal wrapping. In fullscreen mode, hover for a scrollable preview or click to expand; click expanded thinking to collapse it again. `Ctrl+T` (configurable as `app.thinking.toggle`) toggles all thinking blocks and resets individual overrides. Previews use the same hover delay as tool previews when Grok UI is active. Collapsed thinking is only rendered as Markdown when expanded or previewed; stored messages and model context are unchanged.
+Thinking Steps groups source headings, list items, and paragraphs without making model calls. Role labels describe the text's subject; a `verify` step does not mean a test passed.
+
+- `collapsed`: one row showing the current step.
+- `summary`: up to five steps in source order, keeping the opening and current step and prioritizing failures, decisions, and verification.
+- `expanded`: all steps with their complete Markdown bodies, including code blocks.
+
+Use `/thinking-steps collapsed|summary|expanded`, `/thinking-steps` for a picker, or the Thinking view entry in `/settings`. `Alt+T` (`app.thinking.cycleView`) cycles all three modes. `Ctrl+T` (`app.thinking.toggle`) switches between collapsed and the last non-collapsed view. These global controls save the choice and reset individual click overrides.
+
+In fullscreen mode, hover over collapsed or summary thinking for a scrollable full-text preview. Clicking expands the run; clicking again returns to the selected compact view (summary when the global mode is expanded). Previews retain the Grok hover delay. Markdown renders only when expanded or previewed, and completed code-block caches survive folding and streamed updates. Stored messages and model context are unchanged.
 
 ## Interaction
 
