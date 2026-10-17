@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- Fixed repeated layout of unchanged assistant messages and Thinking Steps during fullscreen scrolling, while retaining hover previews, clicks, and cache refreshes on content, width, mode, and theme changes
 - Fixed duplicate Grok theme warnings by using the installed theme discovery link instead of loading the theme again through launcher arguments
 - Fixed the source launcher treating CLI subcommands such as `pi list` as chat prompts; subcommands now pass through without prepended interactive options
 - Fixed source installs being shadowed by the old local-release launcher in `~/.bun/bin/pi`; recognized legacy wrappers now follow the source installation and are restored on uninstall
@@ -20,7 +21,7 @@
 
 ### Changed
 
-- Changed collapsed thinking to show up to three recent source excerpts, with bounded incremental extraction and the existing full-text hover previews and click-to-expand behavior
+- Changed thinking display to native collapsed, summary, and expanded step views, with `/thinking-steps`, configurable Alt+T cycling, and a persisted `thinkingViewMode` setting; retained Markdown caches, full-text hover previews, and individual click-to-expand behavior
 - Changed Grok input to use the native editor's top and bottom horizontal rules, removing side borders and the duplicate model/thinking caption while retaining embedded working status
 - Changed Grok message headings to show the system username and each reply's recorded model ID, with one heading when the extension is loaded twice, and the Grok header to show the current model ID
 - Added the assistant message's model ID to Markdown transformer context

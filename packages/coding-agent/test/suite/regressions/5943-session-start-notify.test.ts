@@ -2,6 +2,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
+import type { ThinkingViewMode } from "../../../src/core/thinking-view.ts";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
 import { createHarness, createTestUiContext } from "../harness.ts";
@@ -51,7 +52,7 @@ type RebindContext = {
 };
 
 type ReloadCommandContext = {
-	hideThinkingBlock: boolean;
+	thinkingViewMode: ThinkingViewMode;
 	session: {
 		isStreaming: boolean;
 		isCompacting: boolean;
@@ -62,7 +63,7 @@ type ReloadCommandContext = {
 	};
 	settingsManager: {
 		getHttpIdleTimeoutMs: () => number;
-		getHideThinkingBlock: () => boolean;
+		getThinkingViewMode: () => ThinkingViewMode;
 		getOutputPad: () => 0 | 1;
 		getEditorPaddingX: () => number;
 		getAutocompleteMaxVisible: () => number;
@@ -120,7 +121,7 @@ type ReloadCommandContextOverrides = Omit<
 function createReloadCommandContext(overrides: ReloadCommandContextOverrides = {}): ReloadCommandContext {
 	const editor = overrides.editor ?? {};
 	return {
-		hideThinkingBlock: overrides.hideThinkingBlock ?? false,
+		thinkingViewMode: overrides.thinkingViewMode ?? "summary",
 		session: {
 			isStreaming: false,
 			isCompacting: false,
@@ -134,7 +135,7 @@ function createReloadCommandContext(overrides: ReloadCommandContextOverrides = {
 		},
 		settingsManager: {
 			getHttpIdleTimeoutMs: () => 0,
-			getHideThinkingBlock: () => false,
+			getThinkingViewMode: () => "summary",
 			getOutputPad: () => 1,
 			getEditorPaddingX: () => 1,
 			getAutocompleteMaxVisible: () => 10,
@@ -416,28 +417,28 @@ describe("regression #5943: session_start transient UI", () => {
 		}
 	});
 
-	it("refreshes hideThinkingBlock before rebuilding chat during reload", async () => {
+	it("refreshes thinkingViewMode before rebuilding chat during reload", async () => {
 		initTheme("dark", false);
 		const events: string[] = [];
 		let context: ReloadCommandContext;
 		context = createReloadCommandContext({
-			settingsManager: { getHideThinkingBlock: () => true },
+			settingsManager: { getThinkingViewMode: () => "expanded" },
 			session: {
 				reload: async (options) => {
 					events.push("reload");
 					await options?.beforeSessionStart?.();
-					events.push(`start:${context.hideThinkingBlock}`);
+					events.push(`start:${context.thinkingViewMode}`);
 				},
 			},
 			rebuildChatFromMessages: () => {
-				events.push(`rebuild:${context.hideThinkingBlock}`);
+				events.push(`rebuild:${context.thinkingViewMode}`);
 			},
 		});
 
 		await interactiveModePrototype.handleReloadCommand.call(context);
 
-		expect(context.hideThinkingBlock).toBe(true);
-		expect(events).toEqual(["reload", "rebuild:true", "start:true"]);
+		expect(context.thinkingViewMode).toBe("expanded");
+		expect(events).toEqual(["reload", "rebuild:expanded", "start:expanded"]);
 	});
 
 	it("keeps the reload blocker focused until async reload completes", async () => {

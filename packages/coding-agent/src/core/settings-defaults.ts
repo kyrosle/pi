@@ -25,6 +25,7 @@ export const SETTINGS_DEFAULTS = {
 		},
 	},
 	hideThinkingBlock: false,
+	thinkingViewMode: "summary",
 	showCacheMissNotices: false,
 	quietStartup: false,
 	defaultProjectTrust: "ask",

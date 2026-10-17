@@ -52,6 +52,10 @@ const APP_KEYBINDINGS = {
 		defaultKeys: "ctrl+t",
 		description: "Toggle thinking blocks",
 	},
+	"app.thinking.cycleView": {
+		defaultKeys: "alt+t",
+		description: "Cycle thinking view: collapsed, summary, expanded",
+	},
 	"app.session.toggleNamedFilter": {
 		defaultKeys: "ctrl+n",
 		description: "Toggle named session filter",
