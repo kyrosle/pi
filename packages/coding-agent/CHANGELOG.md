@@ -71,6 +71,7 @@
 
 ### Changed
 
+- Changed collapsed thinking to show up to three recent source excerpts, with bounded incremental extraction and the existing full-text hover previews and click-to-expand behavior
 - Changed Grok input to use the native editor's top and bottom horizontal rules, removing side borders and the duplicate model/thinking caption while retaining embedded working status
 - Changed Grok message headings to show the system username and each reply's recorded model ID, with one heading when the extension is loaded twice, and the Grok header to show the current model ID
 - Added the assistant message's model ID to Markdown transformer context
