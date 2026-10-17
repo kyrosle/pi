@@ -12,10 +12,10 @@ import {
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
 import type { MarkdownTransformContext, MarkdownTransformer } from "../../../core/extensions/types.ts";
-import { stripAnsi } from "../../../utils/ansi.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 import { PreviewPanel } from "./preview-panel.ts";
+import { ThinkingSummary } from "./thinking-summary.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -45,6 +45,7 @@ export class AssistantMessageComponent extends Container {
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
 	// Keyed by content position, so a streamed update reuses the Markdown (and its block cache) instead of rebuilding it.
 	private markdownRecords = new Map<string, MarkdownRecord>();
+	private thinkingSummaries = new Map<number, ThinkingSummary>();
 
 	constructor(
 		message?: AssistantMessage,
@@ -124,6 +125,8 @@ export class AssistantMessageComponent extends Container {
 		this.contentContainer.clear();
 		const previousRecords = this.markdownRecords;
 		this.markdownRecords = new Map();
+		const previousSummaries = this.thinkingSummaries;
+		this.thinkingSummaries = new Map();
 
 		const hasVisibleContent = message.content.some(
 			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
@@ -180,22 +183,22 @@ export class AssistantMessageComponent extends Container {
 					message.model,
 					{ color: (text: string) => theme.fg("thinkingText", text), italic: true },
 				);
-				let lineCount = 1;
-				for (let newline = thinking.indexOf("\n"); newline !== -1; newline = thinking.indexOf("\n", newline + 1)) {
-					lineCount++;
-				}
-				const firstLineEnd = thinking.indexOf("\n");
-				const excerpt = stripAnsi(
-					thinking.slice(0, Math.min(firstLineEnd < 0 ? thinking.length : firstLineEnd, 256)),
-				)
-					.replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, " ")
-					.trim();
-				const label = `▸ ${this.hiddenThinkingLabel} · ${lineCount} ${lineCount === 1 ? "line" : "lines"} · ${excerpt}`;
+				const summary = previousSummaries.get(runStart) ?? new ThinkingSummary();
+				this.thinkingSummaries.set(runStart, summary);
+				const { lineCount, stepCount, steps } = summary.update(thinking);
+				const label = `▸ ${this.hiddenThinkingLabel} · ${lineCount} ${lineCount === 1 ? "line" : "lines"}`;
 				const thinkingComponent = hidden
 					? {
 							render: (width: number) => [
-								theme.italic(
-									theme.fg("thinkingText", truncateToWidth(" ".repeat(this.outputPad) + label, width)),
+								theme.fg("muted", truncateToWidth(" ".repeat(this.outputPad) + label, width)),
+								...steps.map((step, index) =>
+									theme.fg(
+										"thinkingText",
+										truncateToWidth(
+											`${" ".repeat(this.outputPad)}  ${stepCount - steps.length + index + 1}. ${step}`,
+											width,
+										),
+									),
 								),
 							],
 							invalidate() {},

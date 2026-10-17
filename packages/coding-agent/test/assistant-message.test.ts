@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { TuiAltScreen, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
+import { Text, TuiAltScreen, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
@@ -123,12 +123,13 @@ describe("AssistantMessageComponent", () => {
 		expect(component.handleMouse(event)?.handled).toBe(true);
 
 		const collapsed = stripAnsi(component.render(width).join("\n"));
-		expect(collapsed).toContain("▸ Thinking... · 1 line · first reasoning");
+		expect(collapsed).toContain("▸ Thinking... · 1 line");
+		expect(collapsed).toContain("1. first reasoning");
 		expect(collapsed).toContain("Thinking...");
 		expect(collapsed).toContain("second reasoning");
 	});
 
-	test("keeps collapsed thinking to one safe row at narrow and Unicode widths without rendering Markdown", () => {
+	test("keeps thinking excerpts to safe single rows at narrow and Unicode widths without rendering Markdown", () => {
 		initTheme("dark");
 		let transforms = 0;
 		const component = new AssistantMessageComponent(undefined, true, undefined, "Thinking...", 1, [
@@ -149,13 +150,38 @@ describe("AssistantMessageComponent", () => {
 			);
 			for (const width of [1, 4, 12, 24, 80]) {
 				const lines = component.render(width).map(stripAnsi);
-				expect(lines).toHaveLength(2);
+				expect(lines).toHaveLength(3);
 				expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
 				expect(lines.join("")).not.toMatch(/[\r\t\x1b]/);
 			}
-			expect(stripAnsi(component.render(100)[1])).toContain(`${size + 2} lines · 中文`);
+			expect(stripAnsi(component.render(100)[1])).toContain(`${size + 2} lines`);
+			expect(stripAnsi(component.render(100)[2])).toContain("1. 中文");
 		}
 		expect(transforms).toBe(0);
+	});
+
+	test("caps streamed summaries at three steps and preserves their height on completion and restore", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(undefined, true);
+		const blocks = ["# Inspect", "- Check paths", "- Run tests", "Not verified yet", "Review the result"];
+		for (let count = 1; count <= blocks.length; count++) {
+			const message = createAssistantMessage([{ type: "thinking", thinking: blocks.slice(0, count).join("\n\n") }]);
+			const original = structuredClone(message);
+			component.updateContent(message, true);
+			const streaming = component.render(80);
+			expect(streaming).toHaveLength(2 + Math.min(count, 3));
+			component.updateContent(message, false);
+			expect(component.render(80)).toEqual(streaming);
+			expect(component.render(80)).toEqual(new AssistantMessageComponent(message, true).render(80));
+			expect(message).toEqual(original);
+		}
+		const lines = component.render(80).map(stripAnsi);
+		expect(lines.slice(2)).toEqual(["   3. Run tests", "   4. Not verified yet", "   5. Review the result"]);
+		component.setOutputPad(0);
+		expect(stripAnsi(component.render(80)[2])).toBe("  3. Run tests");
+		component.invalidate();
+		expect(component.render(20)).toHaveLength(5);
+		expect(component.render(20).every((line) => visibleWidth(line) <= 20)).toBe(true);
 	});
 
 	test("reuses completed thinking code layouts across folding and subsequent streamed updates", () => {
@@ -185,6 +211,38 @@ describe("AssistantMessageComponent", () => {
 		component.setHideThinkingBlock(false);
 		component.render(80);
 		expect(highlights).toBe(1);
+	});
+
+	test("keeps the transcript viewport anchored while capped thinking steps stream below it", async () => {
+		initTheme("dark");
+		const terminal = new VirtualTerminal(60, 16);
+		const tui = new TuiAltScreen(terminal);
+		const component = new AssistantMessageComponent(undefined, true, undefined, "Thinking...", 1, [], tui);
+		const thinking = "First\n\nSecond\n\nThird";
+		component.updateContent(createAssistantMessage([{ type: "thinking", thinking }]), true);
+		tui.addChild(new Text(Array.from({ length: 60 }, (_, index) => `history ${index}`).join("\n"), 0, 0));
+		tui.addChild(component);
+		tui.start();
+		try {
+			await terminal.waitForRender();
+			tui.scrollBy(-20);
+			await terminal.waitForRender();
+			const top = tui.viewportTop;
+			const viewport = terminal.getViewport();
+			for (const isStreaming of [true, false]) {
+				component.updateContent(
+					createAssistantMessage([{ type: "thinking", thinking: `${thinking}\n\nFourth\n\nFifth` }]),
+					isStreaming,
+				);
+				tui.renderNow();
+				await terminal.flush();
+				expect(tui.isFollowingOutput).toBe(false);
+				expect(tui.viewportTop).toBe(top);
+				expect(terminal.getViewport()).toEqual(viewport);
+			}
+		} finally {
+			tui.stop();
+		}
 	});
 
 	test("previews current streamed thinking, scrolls independently, expands on click and respects the global toggle", async () => {
@@ -225,7 +283,7 @@ describe("AssistantMessageComponent", () => {
 			expect(tui.hasOverlay()).toBe(false);
 			expect(stripAnsi(component.render(100).join("\n"))).toContain("new tail");
 			component.setHideThinkingBlock(true);
-			expect(component.render(100)).toHaveLength(2);
+			expect(component.render(100)).toHaveLength(3);
 		} finally {
 			tui.stop();
 		}
