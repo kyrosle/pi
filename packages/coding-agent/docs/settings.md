@@ -25,15 +25,19 @@ Cache warming runs only when the model declares a cache lifetime and Pi estimate
 
 See [Choose a Model](models.md) for model selection and thinking controls.
 
-Thinking Steps groups source headings, list items, and paragraphs without making model calls. Role labels describe the text's subject; a `verify` step does not mean a test passed.
+Thinking Steps groups source headings, list items, and paragraphs without making model calls. Summaries select salient source sentences within each step, including conclusions and explicit outcomes beyond the opening line. Icons and colors describe the text's subject; a green verification icon does not mean a test passed. The currently streaming step is emphasized until thinking ends or answer text begins.
 
-- `collapsed`: one row showing the current step.
-- `summary`: up to five steps in source order, keeping the opening and current step and prioritizing failures, decisions, and verification.
-- `expanded`: all steps with their complete Markdown bodies, including code blocks.
+- `collapsed`: a compact preview of the current step, wrapping when needed.
+- `summary`: a numbered summary for every step, in source order, with all step bodies folded.
+- `expanded`: the complete original thinking through the native Markdown renderer, with its original paragraphs, lists, and code blocks. No generated step headings, summaries, tree lines, or step grouping are added.
+
+Long summaries wrap with aligned continuation lines instead of being cut off at the terminal edge. Unchanged messages reuse their rendered lines while scrolling.
 
 Use `/thinking-steps collapsed|summary|expanded`, `/thinking-steps` for a picker, or the Thinking view entry in `/settings`. `Alt+T` (`app.thinking.cycleView`) cycles all three modes. `Ctrl+T` (`app.thinking.toggle`) switches between collapsed and the last non-collapsed view. These global controls save the choice and reset individual click overrides.
 
-In fullscreen mode, hover over collapsed or summary thinking for a scrollable full-text preview. Clicking expands the run; clicking again returns to the selected compact view (summary when the global mode is expanded). Previews retain the Grok hover delay. Markdown renders only when expanded or previewed, and completed code-block caches survive folding and streamed updates. Stored messages and model context are unchanged.
+Click anywhere in a Thinking Steps block to show the whole block's original thinking, exactly as in expanded mode. Clicking the original text returns that block to the selected compact view (summary when the global mode is expanded). Other thinking blocks keep their state. Global view changes reset these block overrides.
+
+In fullscreen mode, hover over collapsed or summary thinking for a scrollable preview of the whole block's original text. Clicking the preview expands the whole block. Previews retain the Grok hover delay. Markdown renders only when expanded or previewed, and completed code-block caches survive folding and streamed updates. Stored messages and model context are unchanged.
 
 ## Interaction
 

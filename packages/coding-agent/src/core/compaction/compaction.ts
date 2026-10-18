@@ -1174,7 +1174,9 @@ async function generateTurnPrefixSummary(
 		streamFn,
 		retry,
 		callbacks,
-		TURN_PREFIX_SUMMARIZATION_PROMPT,
+		customInstructions
+			? `${TURN_PREFIX_SUMMARIZATION_PROMPT}\n\nAdditional focus: ${customInstructions}`
+			: TURN_PREFIX_SUMMARIZATION_PROMPT,
 	);
 
 	const failure = getSummarizationFailure(response, "Turn prefix summarization");

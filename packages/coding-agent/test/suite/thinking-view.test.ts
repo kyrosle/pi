@@ -65,12 +65,13 @@ test("native thinking controls change the view without changing model history or
 		expect(render()).toContain("Summary");
 		expect(render()).not.toContain("body detail");
 		editor.handleInput("\x1bt");
-		expect(render()).toContain("Expanded");
+		expect(render()).not.toContain("Thinking Steps");
 		expect(render()).toContain("body detail");
 		editor.handleInput("\x14");
-		expect(render()).toContain("▸ Thinking Steps · verify: Run tests");
+		expect(render()).toContain("▸ Thinking Steps · ✓ Run tests");
 		editor.handleInput("\x14");
-		expect(render()).toContain("Expanded");
+		expect(render()).not.toContain("Thinking Steps");
+		expect(render()).toContain("body detail");
 		editor.handleInput("\x1bt");
 		expect(context.thinkingViewMode).toBe("collapsed");
 		editor.handleInput("\x1bt");

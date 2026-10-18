@@ -32,6 +32,7 @@
 - Fixed GPT-5.4 and GPT-5.5 failing with `Missing namespace for function_call` after switching from another model that called tools. On the OpenAI and OpenCode providers they now declare their tools in the top-level tool list instead of loading them through `additional_tools` or tool search ([#11415](https://github.com/earendil-works/pi/issues/11415))
 - Fixed Bedrock requests failing when `strict: "prefer"` tools exceed Claude's strict tool limits, such as more than 16 optional parameters across all strict tools; requests now retry once with preferred tools non-strict while keeping `strict: "require"` tools strict, as the Anthropic provider already does ([#11416](https://github.com/earendil-works/pi/issues/11416))
 - Fixed OpenRouter's `~anthropic/claude-*-latest` aliases losing Claude's earlier thinking after each tool call. They used the Chat Completions API, where pi dropped the thinking signature, and OpenRouter then ignored the unsigned thinking. They now use the Anthropic Messages API with adaptive thinking, like the versioned Claude models ([#9534](https://github.com/earendil-works/pi/issues/9534))
+- Recognized descriptive HTTP 413 payload-size errors as context overflow and stopped retrying unchanged overflowing input as a transient provider error
 
 ## [1.4.0] - 2026-10-21
 
@@ -87,7 +88,6 @@
 
 ### Fixed
 
-- Recognized descriptive HTTP 413 payload-size errors as context overflow and stopped retrying unchanged overflowing input as a transient provider error
 - Fixed tool-call argument parsing dropping fields when a string contains an invalid `\u` escape such as `\usepackage` ([#10868](https://github.com/earendil-works/pi/issues/10868))
 - Fixed Anthropic and Bedrock Claude requests failing with a 400 when an error tool result contains images; the images are now sent after the tool results of the turn, so the model still sees them ([#10794](https://github.com/earendil-works/pi/issues/10794))
 - Fixed OpenCode Go Gemini models failing with a 404 by moving OpenCode Zen and OpenCode Go to the `opencode.ai/inference` endpoints, and added Google Generative AI support to the OpenCode Go provider

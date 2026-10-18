@@ -1,10 +1,10 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Text, TuiAltScreen, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
+import { isImageLine, Markdown, Text, TuiAltScreen, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
-import { getMarkdownTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { getMarkdownTheme, initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -32,6 +32,26 @@ function createAssistantMessage(
 		stopReason: overrides.stopReason ?? "stop",
 		timestamp: Date.now(),
 	};
+}
+
+function clickRenderedRow(component: AssistantMessageComponent, text: string, width = 120) {
+	const lines = component.render(width);
+	const y = lines.findIndex((line) => stripAnsi(line).includes(text));
+	expect(y).toBeGreaterThanOrEqual(0);
+	return component.handleMouse({
+		type: "click",
+		button: "left",
+		x: 1,
+		y,
+		screenX: 1,
+		screenY: y,
+		width,
+		height: lines.length,
+		shift: false,
+		alt: false,
+		ctrl: false,
+		clickCount: 1,
+	});
 }
 
 describe("AssistantMessageComponent", () => {
@@ -198,12 +218,12 @@ describe("AssistantMessageComponent", () => {
 
 		const collapsed = stripAnsi(component.render(width).join("\n"));
 		expect(collapsed).toContain("Thinking Steps · Summary · 1 step");
-		expect(collapsed).toContain("1. reasoning: first reasoning");
-		expect(collapsed).toContain("Thinking Steps · Expanded");
+		expect(collapsed).toContain("└─ · Step 1 · first reasoning");
+		expect(collapsed.match(/Thinking Steps/g)).toHaveLength(1);
 		expect(collapsed).toContain("second reasoning");
 	});
 
-	test("keeps thinking excerpts to safe single rows at narrow and Unicode widths without rendering Markdown", () => {
+	test("wraps thinking summaries safely at narrow and Unicode widths without rendering Markdown", () => {
 		initTheme("dark");
 		let transforms = 0;
 		const component = new AssistantMessageComponent(undefined, true, undefined, "Thinking...", 1, [
@@ -224,16 +244,16 @@ describe("AssistantMessageComponent", () => {
 			);
 			for (const width of [1, 4, 12, 24, 80]) {
 				const lines = component.render(width).map(stripAnsi);
-				expect(lines).toHaveLength(2);
+				expect(lines.length).toBeGreaterThan(1);
 				expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
 				expect(lines.join("")).not.toMatch(/[\r\t\x1b]/);
 			}
-			expect(stripAnsi(component.render(100)[1])).toContain("reasoning: 中文");
+			expect(stripAnsi(component.render(100).join("\n"))).toContain("中文");
 		}
 		expect(transforms).toBe(0);
 	});
 
-	test("caps streamed summaries at five salient steps and preserves their height on completion and restore", () => {
+	test("shows every step in source order while streaming, on completion, and after restore", () => {
 		initTheme("dark");
 		const component = new AssistantMessageComponent(undefined, "summary");
 		const blocks = [
@@ -250,24 +270,27 @@ describe("AssistantMessageComponent", () => {
 			const original = structuredClone(message);
 			component.updateContent(message, true);
 			const streaming = component.render(80);
-			expect(streaming).toHaveLength(2 + Math.min(count, 5));
+			expect(streaming).toHaveLength(2 + count);
 			component.updateContent(message, false);
-			expect(component.render(80)).toEqual(streaming);
+			expect(component.render(80).map(stripAnsi)).toEqual(streaming.map(stripAnsi));
 			expect(component.render(80)).toEqual(new AssistantMessageComponent(message, "summary").render(80));
 			expect(message).toEqual(original);
 		}
 		const lines = component.render(80).map(stripAnsi);
+		expect(lines[1]).toContain("Thinking Steps · Summary · 7 steps");
 		expect(lines.slice(2)).toEqual([
-			" ├─ 1. inspect: Inspect",
-			" ├─ 2. failure: Failed to open file",
-			" ├─ 3. decision: Decided to retry",
-			" ├─ 6. verify: Run tests",
-			" └─ 7. plan: Next task",
+			" ├─ ◫ Step 1 · Inspect",
+			" ├─ ! Step 2 · Failed to open file",
+			" ├─ ◆ Step 3 · Decided to retry",
+			" ├─ ◫ Step 4 · Read config",
+			" ├─ ✎ Step 5 · Write output",
+			" ├─ ✓ Step 6 · Run tests",
+			" └─ ◇ Step 7 · Next task",
 		]);
 		component.setOutputPad(0);
-		expect(stripAnsi(component.render(80)[2])).toBe("├─ 1. inspect: Inspect");
+		expect(stripAnsi(component.render(80)[2])).toBe("├─ ◫ Step 1 · Inspect");
 		component.invalidate();
-		expect(component.render(20)).toHaveLength(7);
+		expect(component.render(20).length).toBeGreaterThan(7);
 		expect(component.render(20).every((line) => visibleWidth(line) <= 20)).toBe(true);
 	});
 
@@ -298,6 +321,341 @@ describe("AssistantMessageComponent", () => {
 		component.setHideThinkingBlock(false);
 		component.render(80);
 		expect(highlights).toBe(1);
+	});
+
+	test("reuses all thinking code layouts across whole-run click toggles", () => {
+		initTheme("dark");
+		const highlight = vi.fn((code: string) => code.split("\n"));
+		const source =
+			"Inspect first\n```ts\nconst first = 1;\n```\n\nInspect second\n```ts\nconst second = 2;\n```\n\nTail";
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: source }]),
+			"summary",
+			{
+				...getMarkdownTheme(),
+				highlightCode: highlight,
+			},
+		);
+		component.render(120);
+		expect(highlight).not.toHaveBeenCalled();
+		clickRenderedRow(component, "Step 1 · Inspect first");
+		const opened = component.render(120);
+		expect(highlight).toHaveBeenCalledTimes(2);
+		expect(highlight.mock.calls[0][0]).toContain("const first = 1;");
+		expect(highlight.mock.calls[1][0]).toContain("const second = 2;");
+		for (let frame = 0; frame < 20; frame++) expect(component.render(120)).toBe(opened);
+		clickRenderedRow(component, "Inspect first");
+		component.render(120);
+		clickRenderedRow(component, "Step 1 · Inspect first");
+		component.render(120);
+		expect(highlight).toHaveBeenCalledTimes(2);
+		component.updateContent(createAssistantMessage([{ type: "thinking", thinking: `${source}\nmore detail` }]), true);
+		component.render(120);
+		expect(highlight).toHaveBeenCalledTimes(2);
+		clickRenderedRow(component, "Inspect second");
+		component.render(120);
+		expect(highlight).toHaveBeenCalledTimes(2);
+		expect(stripAnsi(component.render(120).join("\n"))).not.toContain("const first = 1;");
+	});
+
+	test.each(["collapsed", "summary"] as const)(
+		"emphasizes only the currently streaming step in %s and clears it when text begins",
+		(mode) => {
+			initTheme("dark");
+			const component = new AssistantMessageComponent(undefined, mode);
+			const message = createAssistantMessage([{ type: "thinking", thinking: "Inspect input\n\nRun tests" }]);
+			component.updateContent(message, true);
+			const active = theme.style(mode === "collapsed" ? "Run tests" : "Step 2 · Run tests", {
+				fg: "thinkingText",
+				bold: true,
+			});
+			expect(component.render(100).join("\n")).toContain(active);
+			expect(component.render(100).join("\n")).not.toContain(
+				theme.style(mode === "collapsed" ? "Inspect input" : "Step 1 · Inspect input", {
+					fg: "thinkingText",
+					bold: true,
+				}),
+			);
+			const cached = component.render(100);
+			expect(component.render(100)).toBe(cached);
+			message.content.push({ type: "text", text: "Answer starts" });
+			component.updateContent(message, true);
+			expect(component.render(100).join("\n")).not.toContain(active);
+			component.updateContent(message, false);
+			expect(component.render(100).join("\n")).not.toContain(active);
+		},
+	);
+
+	test("uses role colors and wraps summaries with tree continuations instead of truncating them", () => {
+		initTheme("dark");
+		const long = "Inspect configuration across several directories and preserve the final detail";
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: `${long}\n\nCompare options\n\nRun tests` }]),
+			"summary",
+		);
+		const lines = component.render(32);
+		const ansi = lines.join("\n");
+		expect(ansi).toContain(theme.fg("mdLink", "◫"));
+		expect(ansi).toContain(theme.fg("warning", "↔"));
+		expect(ansi).toContain(theme.fg("success", "✓"));
+		expect(lines.every((line) => visibleWidth(line) <= 32)).toBe(true);
+		const plain = lines.map(stripAnsi);
+		expect(plain.some((line) => line.startsWith(" │    "))).toBe(true);
+		expect(plain.slice(2).join(" ").replaceAll("│", "").replace(/\s+/g, " ")).toContain(long);
+		expect(plain.slice(2).join("\n")).not.toContain("…");
+		const y = plain.findIndex((line) => line.startsWith(" │    "));
+		expect(
+			component.handleMouse({
+				type: "click",
+				button: "left",
+				x: 8,
+				y,
+				screenX: 8,
+				screenY: y,
+				width: 32,
+				height: lines.length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				clickCount: 1,
+			})?.handled,
+		).toBe(true);
+		const opened = stripAnsi(component.render(120).join("\n"));
+		expect(opened).not.toMatch(/Thinking Steps|Step \d|[├└]─/u);
+		expect(opened).toContain(long);
+		expect(opened).toContain("Compare options");
+		expect(opened).toContain("Run tests");
+		expect(component.render(120)).toEqual(
+			new AssistantMessageComponent(
+				createAssistantMessage([{ type: "thinking", thinking: `${long}\n\nCompare options\n\nRun tests` }]),
+				"expanded",
+			).render(120),
+		);
+	});
+
+	test("renders the untrimmed complete thinking source with native Markdown and no generated structure", () => {
+		initTheme("dark");
+		const blocks = [
+			"    const indented = 1;\n\nInspect **config**\n```ts\n  const value = 1;\n```\n\n- Check path\n  continuation\n\n",
+			"\nDecided to stop\n\n",
+		];
+		const thinking = blocks.join("\n\n");
+		const transform = vi.fn((source: string) => source);
+		const message = createAssistantMessage(blocks.map((source) => ({ type: "thinking", thinking: source })));
+		const component = new AssistantMessageComponent(message, "expanded", undefined, "Thinking...", 1, [transform]);
+		const markdown = new Markdown(thinking, 1, 0, getMarkdownTheme(), {
+			color: (text: string) => theme.fg("thinkingText", text),
+			italic: true,
+		});
+		for (const width of [64, 24, 12, 4, 1]) {
+			const lines = component.render(width).map(stripAnsi);
+			expect(lines.slice(1)).toEqual(markdown.render(width).map(stripAnsi));
+			expect(lines.join("\n")).not.toMatch(/Thinking Steps|Step \d|[├└]─/u);
+		}
+		expect(transform.mock.calls.every(([source]) => source === thinking)).toBe(true);
+		expect(transform).toHaveBeenCalled();
+		const completed = component.render(64);
+		component.updateContent(message, true);
+		expect(component.render(64)).toEqual(completed);
+	});
+
+	test("clicking Step 2 expands all seven paragraphs exactly like the global expanded mode", () => {
+		initTheme("dark");
+		const paragraphs = [
+			"The user wants a brief comparison. No code is needed.",
+			"Let me give a concise answer.",
+			"Current: A wrapper around an external library.",
+			"Ideal: A service that owns its lifecycle.",
+			"Keep it short and clear.",
+			"I need to end with a brief note about the response.",
+			"Let me write it tight.",
+		];
+		const message = createAssistantMessage([{ type: "thinking", thinking: paragraphs.join("\n\n") }]);
+		const original = structuredClone(message);
+		const component = new AssistantMessageComponent(message, "summary");
+		const summary = stripAnsi(component.render(120).join("\n"));
+		expect(summary).toContain("Summary · 7 steps");
+		expect(summary).toContain(paragraphs[2]);
+		expect(summary).toContain(paragraphs[3]);
+		expect(summary).toContain(paragraphs[4]);
+		expect(summary).toContain(paragraphs[5]);
+		expect(summary).not.toContain("No code is needed.");
+		expect(clickRenderedRow(component, "Step 2 ·")?.handled).toBe(true);
+		expect(component.render(120)).toEqual(new AssistantMessageComponent(message, "expanded").render(120));
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).not.toMatch(/Thinking Steps|Step \d|[├└]─/u);
+		let previous = -1;
+		for (const paragraph of paragraphs) {
+			expect(expanded.split(paragraph)).toHaveLength(2);
+			const start = expanded.indexOf(paragraph);
+			expect(start).toBeGreaterThan(previous);
+			previous = start;
+		}
+		expect(clickRenderedRow(component, "No code is needed.")?.handled).toBe(true);
+		expect(stripAnsi(component.render(120).join("\n"))).toBe(summary);
+		expect(message).toEqual(original);
+	});
+
+	test("toggles the entire clicked run from a step or body while leaving other runs unchanged", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{
+					type: "thinking",
+					thinking: "Inspect first\nfirst hidden detail\n\nInspect second\nsecond hidden detail",
+				},
+				{ type: "text", text: "Answer" },
+				{ type: "thinking", thinking: "Inspect other run\nother hidden detail" },
+			]),
+			"summary",
+		);
+		expect(clickRenderedRow(component, "Step 2 · Inspect second")?.handled).toBe(true);
+		let rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("first hidden detail");
+		expect(rendered).toContain("second hidden detail");
+		expect(rendered).not.toContain("other hidden detail");
+		expect(clickRenderedRow(component, "first hidden detail")?.handled).toBe(true);
+		rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).not.toContain("first hidden detail");
+		expect(rendered).not.toContain("second hidden detail");
+		expect(rendered).not.toContain("other hidden detail");
+		expect(rendered.match(/Thinking Steps · Summary/g)).toHaveLength(2);
+		component.setThinkingViewMode("expanded");
+		expect(clickRenderedRow(component, "other hidden detail")?.handled).toBe(true);
+		rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("first hidden detail");
+		expect(rendered).toContain("second hidden detail");
+		expect(rendered).not.toContain("other hidden detail");
+	});
+
+	test("preserves run overrides through append and layout changes and clears them on global mode changes", () => {
+		initTheme("dark");
+		const source = "Inspect first\nfirst hidden detail\n\nInspect second\nsecond hidden detail";
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: source }]),
+			"summary",
+		);
+		clickRenderedRow(component, "Step 1 · Inspect first");
+		const appended = `${source}\nmore second detail`;
+		component.updateContent(createAssistantMessage([{ type: "thinking", thinking: appended }]), true);
+		component.invalidate();
+		component.render(40);
+		let rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("first hidden detail");
+		expect(rendered).toContain("more second detail");
+		component.setThinkingViewMode("summary");
+		expect(stripAnsi(component.render(120).join("\n"))).not.toContain("first hidden detail");
+		clickRenderedRow(component, "Thinking Steps");
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("second hidden detail");
+		clickRenderedRow(component, "second hidden detail");
+		rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("Summary");
+		expect(rendered).not.toContain("first hidden detail");
+		component.setThinkingViewMode("expanded");
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("more second detail");
+		clickRenderedRow(component, "first hidden detail");
+		expect(stripAnsi(component.render(120).join("\n"))).not.toContain("more second detail");
+		component.setThinkingViewMode("expanded");
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("more second detail");
+	});
+
+	test.each(["summary", "expanded"] as const)(
+		"previews the entire folded run when hovering a step in %s and expands the run from the preview",
+		async (mode) => {
+			initTheme("dark");
+			const terminal = new VirtualTerminal(100, 30);
+			const tui = new TuiAltScreen(terminal);
+			tui.setMouseHoverEnabled(true);
+			const source = "Inspect first\nfirst hidden detail\n\nInspect second\nsecond hidden detail";
+			const component = new AssistantMessageComponent(
+				createAssistantMessage([{ type: "thinking", thinking: source }]),
+				mode,
+				undefined,
+				"Thinking...",
+				1,
+				[],
+				tui,
+			);
+			if (mode === "expanded") {
+				clickRenderedRow(component, "Inspect first");
+			}
+			tui.addChild(component);
+			tui.start();
+			try {
+				await terminal.waitForRender();
+				const row = terminal.getViewport().findIndex((line) => line.includes("Step 2 · Inspect second")) + 1;
+				expect(row).toBeGreaterThan(0);
+				terminal.sendInput(`\x1b[<35;5;${row}M`);
+				await terminal.waitForRender();
+				expect(tui.hasOverlay()).toBe(true);
+				expect(terminal.getViewport().join("\n")).toContain("second hidden detail");
+				expect(terminal.getViewport().join("\n")).toContain("first hidden detail");
+				component.updateContent(
+					createAssistantMessage([{ type: "thinking", thinking: `${source}\nnew preview tail` }]),
+					true,
+				);
+				tui.renderNow();
+				await terminal.flush();
+				expect(tui.hasOverlay()).toBe(true);
+				expect(terminal.getViewport().join("\n")).toContain("new preview tail");
+				const panelRow = terminal.getViewport().findIndex((line) => line.includes("Click to expand")) + 1;
+				expect(panelRow).toBeGreaterThan(0);
+				terminal.sendInput(`\x1b[<0;10;${panelRow}M`);
+				terminal.sendInput(`\x1b[<0;10;${panelRow}m`);
+				await terminal.waitForRender();
+				expect(tui.hasOverlay()).toBe(false);
+				const rendered = stripAnsi(component.render(120).join("\n"));
+				expect(rendered).not.toMatch(/Thinking Steps|Step \d|[├└]─/u);
+				expect(rendered).toContain("first hidden detail");
+				expect(rendered).toContain("second hidden detail");
+				expect(rendered).toContain("new preview tail");
+			} finally {
+				tui.stop();
+			}
+		},
+	);
+
+	test("caches a long summary without rendering its full Markdown bodies", () => {
+		initTheme("dark");
+		const paragraphs = Array.from({ length: 100 }, (_, i) => `Inspect section ${i}. Additional detail ${i}.`);
+		const transform = vi.fn((text: string) => text);
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: paragraphs.join("\n\n") }]),
+			"summary",
+			undefined,
+			"Thinking...",
+			1,
+			[transform],
+		);
+		const childRender = vi.spyOn(component.children[0], "render");
+		const lines = component.render(100);
+		expect(lines).toHaveLength(102);
+		for (const [index] of paragraphs.entries())
+			expect(stripAnsi(lines[index + 2])).toContain(`Inspect section ${index}.`);
+		for (let frame = 0; frame < 100; frame++) expect(component.render(100)).toBe(lines);
+		expect(childRender).toHaveBeenCalledTimes(1);
+		expect(transform).not.toHaveBeenCalled();
+	});
+
+	test("preserves opaque terminal image commands from expanded Markdown transformers", () => {
+		initTheme("dark");
+		const image = "\x1b[4A\x1b]1337;File=inline=1;size=3;width=2;height=auto:AAAA\x07";
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "Inspect diagram" },
+				{ type: "text", text: "Done" },
+			]),
+			"expanded",
+			undefined,
+			"Thinking...",
+			1,
+			[(text, context) => (context.messageType === "assistant-thinking" ? image : text)],
+		);
+		for (const width of [8, 40]) {
+			const lines = component.render(width);
+			expect(lines.filter(isImageLine)).toEqual([theme.fg("thinkingText", image)]);
+			expect(lines.filter((line) => !isImageLine(line)).every((line) => visibleWidth(line) <= width)).toBe(true);
+		}
 	});
 
 	test.each(["collapsed", "summary", "expanded"] as const)(
@@ -431,6 +789,60 @@ describe("AssistantMessageComponent", () => {
 			expect(tui.hasOverlay()).toBe(true);
 			expect(transforms).toBe(1);
 			component.updateContent(createAssistantMessage([{ type: "text", text: "answer" }]));
+			expect(tui.hasOverlay()).toBe(false);
+		} finally {
+			tui.stop();
+			vi.useRealTimers();
+		}
+	});
+
+	test("preserves a run preview and its hover delay when unrelated thinking runs are appended", () => {
+		initTheme("dark");
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const tui = new TuiAltScreen(new VirtualTerminal(100, 30));
+		tui.setHoverPreviewDelay(100);
+		const first = { type: "thinking" as const, thinking: "Inspect first\nfirst hidden detail" };
+		const message = createAssistantMessage([first]);
+		const component = new AssistantMessageComponent(message, "summary", undefined, "Thinking...", 1, [], tui);
+		const y = component.render(100).findIndex((line) => stripAnsi(line).includes("Step 1 · Inspect first"));
+		expect(y).toBeGreaterThanOrEqual(0);
+		const hover: TuiMouseEvent = {
+			type: "move",
+			button: "none",
+			x: 1,
+			y,
+			screenX: 1,
+			screenY: y,
+			width: 100,
+			height: 30,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		};
+		tui.addChild(component);
+		tui.start();
+		try {
+			tui.renderNow();
+			component.handleMouse(hover);
+			vi.advanceTimersByTime(50);
+			message.content.push({ type: "text", text: "First answer" }, { type: "thinking", thinking: "Inspect second" });
+			component.updateContent(message, true);
+			component.render(100);
+			component.handleMouse(hover);
+			vi.advanceTimersByTime(51);
+			expect(tui.hasOverlay()).toBe(true);
+			message.content.push({ type: "text", text: "Second answer" }, { type: "thinking", thinking: "Inspect third" });
+			component.updateContent(message, true);
+			component.render(100);
+			expect(tui.hasOverlay()).toBe(true);
+			first.thinking = "Inspect replacement\nreplacement detail";
+			component.updateContent(message, true);
+			expect(tui.hasOverlay()).toBe(false);
+			component.render(100);
+			component.handleMouse(hover);
+			vi.advanceTimersByTime(101);
+			expect(tui.hasOverlay()).toBe(true);
+			component.updateContent(createAssistantMessage([{ type: "text", text: "Only the answer remains" }]));
 			expect(tui.hasOverlay()).toBe(false);
 		} finally {
 			tui.stop();
