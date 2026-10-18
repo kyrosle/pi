@@ -2,9 +2,36 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added one-line thinking excerpts with source-line counts, fullscreen hover previews and individual click-to-expand behavior, retaining Markdown caches while collapsed
+- Added a Grok UI prototype extension with a conversation timeline, compact tool calls with hover previews, and a display-options overlay using Pi's fullscreen layout and extension APIs
+
 ### Changed
 
 - `pi update` for installs from the pi.dev installer no longer passes `--min-release-age=0` to `npm ci`. The release lockfile pins every package, so the flag had no effect, and security scanners that block it stopped the update ([#11262](https://github.com/earendil-works/pi/issues/11262))
+- Changed Thinking Steps summaries to use role icons and colors, emphasize the active step, and wrap long summaries; summaries select salient source sentences beyond the opening line while preserving render caches and mouse interactions
+- Changed thinking display to native collapsed, summary, and expanded step views, with `/thinking-steps`, configurable Alt+T cycling, and a persisted `thinkingViewMode` setting; retained Markdown caches, full-text hover previews, and individual click-to-expand behavior
+- Changed Grok input to use the native editor's top and bottom horizontal rules, removing side borders and the duplicate model/thinking caption while retaining embedded working status
+- Changed Grok message headings to show the system username and each reply's recorded model ID, with one heading when the extension is loaded twice, and the Grok header to show the current model ID
+- Added the assistant message's model ID to Markdown transformer context
+- Moved Grok tool summaries into the extension and shared the preview panel with native thinking, retaining host support for pointer lifecycle and expanding individual tools
+- Moved complete tool-output archiving and bounded excerpts into a default built-in extension, using a validated context-budget hook while keeping request preflight and overflow recovery in the host
+- Changed Grok hover previews to wait two seconds by default, with `/grok-hover-delay` persisting an extension-owned delay setting
+- Changed the Grok UI prototype to distinguish user messages and replies with role headings and a blue-gray user background, while reducing emphasis on thinking and tool output
+- Changed streamed assistant messages to keep their Markdown components between updates, and skipped Mermaid parsing for text without a Mermaid fence, reducing per-update render cost for long responses
+
+### Fixed
+
+- Fixed Thinking Steps summary omitting steps; it now shows every numbered summary in source order, and expanded mode or a single click displays the complete original thinking without generated step headings or grouping
+- Fixed repeated layout of unchanged assistant messages and Thinking Steps during fullscreen scrolling, while retaining hover previews, clicks, and cache refreshes on content, width, mode, and theme changes
+- Fixed Thinking Steps summaries dropping negation or uncertainty across wrapped lines and incorrectly presenting qualified statements as failures or successes
+- Fixed duplicate Grok theme warnings by using the installed theme discovery link instead of loading the theme again through launcher arguments
+- Fixed the source launcher treating CLI subcommands such as `pi list` as chat prompts; subcommands now pass through without prepended interactive options
+- Fixed source installs being shadowed by the old local-release launcher in `~/.bun/bin/pi`; recognized legacy wrappers now follow the source installation and are restored on uninstall
+- Fixed oversized tool results blocking context-overflow recovery: complete results remain in history and private text/JSON files while requests use bounded excerpts, preserve tool-call pairing, and are checked after compaction
+- Fixed oversized summary requests by splitting and merging transcripts and reducing chunk size after an input-size rejection
+- Fixed `/compact` custom instructions being dropped when a split-turn summary requires chunking and merging ([#11058](https://github.com/earendil-works/pi/issues/11058))
 
 ## [1.4.0] - 2026-10-21
 
@@ -18,8 +45,6 @@
 
 ### Added
 
-- Added one-line thinking excerpts with source-line counts, fullscreen hover previews and individual click-to-expand behavior, retaining Markdown caches while collapsed
-- Added a Grok UI prototype extension with a conversation timeline, compact tool calls with hover previews, and a display-options overlay using Pi's fullscreen layout and extension APIs
 - Added a Models Configuration reference generated from the `models.json` schema, listing all provider, model, model override, and compatibility fields ([#10790](https://github.com/earendil-works/pi/issues/10790))
 - Codemode `models.classify()` now accepts `images` for TypeSafe's Jev and Cloudflare's Clef models on `typesafe`, `cloudflare-workers-ai`, and OpenRouter, and lists Clef Omni and Jev 1.14 on Workers AI.
 - Provider-level `compat` in `models.json` now also applies to classifier models, with the System One fields `imageInput` and `sendImageOptInHeader` for proxies that serve another service's classifiers. Extension classifier models accept `compat` too.
@@ -38,12 +63,6 @@
 
 ### Fixed
 
-- Fixed repeated layout of unchanged assistant messages and Thinking Steps during fullscreen scrolling, while retaining hover previews, clicks, and cache refreshes on content, width, mode, and theme changes
-- Fixed duplicate Grok theme warnings by using the installed theme discovery link instead of loading the theme again through launcher arguments
-- Fixed the source launcher treating CLI subcommands such as `pi list` as chat prompts; subcommands now pass through without prepended interactive options
-- Fixed source installs being shadowed by the old local-release launcher in `~/.bun/bin/pi`; recognized legacy wrappers now follow the source installation and are restored on uninstall
-- Fixed oversized tool results blocking context-overflow recovery: complete results remain in history and private text/JSON files while requests use bounded excerpts, preserve tool-call pairing, and are checked after compaction
-- Fixed oversized summary requests by splitting and merging transcripts and reducing chunk size after an input-size rejection
 - Fixed compaction and branch summaries failing with "generation hit the token cap" when reasoning used most of the fixed summary output limit. Summaries now use the model's output limit, and `compaction.reserveTokens` only controls when compaction starts ([#9512](https://github.com/earendil-works/pi/issues/9512), [#9075](https://github.com/earendil-works/pi/issues/9075)).
 - Fixed `models.schema.json` missing descriptions for provider and model fields, so editors showed no hints for them ([#10790](https://github.com/earendil-works/pi/issues/10790))
 - Fixed `pi update` failing with "Managed install marker is missing or invalid" when `managed-install.json` starts with a UTF-8 BOM, which Windows PowerShell 5.1 adds when it rewrites the file.
@@ -69,19 +88,6 @@
 - Fixed an unclosed `$$` display-math block swallowing or corrupting every Markdown table after it ([#11159](https://github.com/earendil-works/pi/issues/11159))
 - Fixed Markdown bold and italic not rendering next to CJK punctuation ([#10730](https://github.com/earendil-works/pi/pull/10730) by [@theBucky](https://github.com/theBucky))
 - Fixed `@` file autocomplete returning no results for queries containing regex metacharacters such as `[` or `(` ([#10972](https://github.com/earendil-works/pi/issues/10972))
-
-### Changed
-
-- Changed thinking display to native collapsed, summary, and expanded step views, with `/thinking-steps`, configurable Alt+T cycling, and a persisted `thinkingViewMode` setting; retained Markdown caches, full-text hover previews, and individual click-to-expand behavior
-- Changed Grok input to use the native editor's top and bottom horizontal rules, removing side borders and the duplicate model/thinking caption while retaining embedded working status
-- Changed Grok message headings to show the system username and each reply's recorded model ID, with one heading when the extension is loaded twice, and the Grok header to show the current model ID
-- Added the assistant message's model ID to Markdown transformer context
-- Moved Grok tool summaries into the extension and shared the preview panel with native thinking, retaining host support for pointer lifecycle and expanding individual tools
-- Moved complete tool-output archiving and bounded excerpts into a default built-in extension, using a validated context-budget hook while keeping request preflight and overflow recovery in the host
-- Changed Grok hover previews to wait two seconds by default, with `/grok-hover-delay` persisting an extension-owned delay setting
-- Changed the Grok UI prototype to distinguish user messages and replies with role headings and a blue-gray user background, while reducing emphasis on thinking and tool output
-- Changed streamed assistant messages to keep their Markdown components between updates, and skipped Mermaid parsing for text without a Mermaid fence, reducing per-update render cost for long responses
-- `generateSummary()` and `generateSummaryWithUsage()` now ignore their `reserveTokens` parameter. Summary requests use the model's output limit instead.
 
 ## [1.3.0] - 2026-10-15
 

@@ -10,23 +10,59 @@ import {
 	Text,
 	type TUI,
 	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { MarkdownTransformContext, MarkdownTransformer } from "../../../core/extensions/types.ts";
 import type { ThinkingViewMode } from "../../../core/thinking-view.ts";
-import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { getMarkdownTheme, type ThemeColor, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 import { PreviewPanel } from "./preview-panel.ts";
-import { selectThinkingSteps, ThinkingSummary } from "./thinking-summary.ts";
+import { type ThinkingRole, type ThinkingStep, ThinkingSummary } from "./thinking-summary.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 
+const THINKING_ROLES: Record<ThinkingRole, { icon: string; color: ThemeColor }> = {
+	inspect: { icon: "◫", color: "mdLink" },
+	search: { icon: "⌕", color: "mdLink" },
+	plan: { icon: "◇", color: "accent" },
+	write: { icon: "✎", color: "accent" },
+	run: { icon: "▷", color: "accent" },
+	compare: { icon: "↔", color: "warning" },
+	verify: { icon: "✓", color: "success" },
+	failure: { icon: "!", color: "error" },
+	decision: { icon: "◆", color: "accent" },
+	reasoning: { icon: "·", color: "muted" },
+};
+
+function thinkingHeader(
+	step: ThinkingStep,
+	width: number,
+	prefix: string,
+	continuation: string,
+	active: boolean,
+): string[] {
+	const { icon, color } = THINKING_ROLES[step.role];
+	let lead = `${prefix}${theme.fg(color, icon)} `;
+	let follow = `${continuation}  `;
+	// At very narrow widths, keep the text readable instead of spending every cell on decoration.
+	if (width - visibleWidth(lead) < 8) lead = follow = "";
+	const text = active
+		? theme.style(step.summary, { fg: "thinkingText", bold: true })
+		: theme.fg("thinkingText", step.summary);
+	const available = width - visibleWidth(lead);
+	if (visibleWidth(step.summary) <= available) return [lead + text];
+	return wrapTextWithAnsi(text, Math.max(1, available)).map((line, index) =>
+		truncateToWidth(`${index === 0 ? lead : follow}${line}`, width),
+	);
+}
+
 /** A Markdown component kept for one content position, with the settings its transform captured. */
 interface MarkdownRecord {
 	config: string;
 	text: string;
-	streaming: boolean;
 	markdown: Markdown;
 }
 
@@ -172,8 +208,8 @@ export class AssistantMessageComponent extends Container {
 					if (thinkingContent.type !== "thinking") {
 						break;
 					}
-					const thinking = thinkingContent.thinking.trim();
-					if (thinking) {
+					const thinking = thinkingContent.thinking;
+					if (thinking.trim()) {
 						thinkingBlocks.push(thinking);
 					}
 				}
@@ -192,6 +228,14 @@ export class AssistantMessageComponent extends Container {
 				const runIndex = thinkingRunIndex++;
 				const mode = this.thinkingVisibilityOverrides.get(runIndex) ?? this.thinkingViewMode;
 				const thinking = thinkingBlocks.join("\n\n");
+				const previousThinking = previousRecords.get(`thinking:${runStart}`)?.text;
+				if (
+					previousThinking !== undefined &&
+					previousRecords.get(`thinking:${runStart}`)?.markdown === this.previewMarkdown &&
+					!thinking.startsWith(previousThinking)
+				) {
+					this.dismissThinkingPreview();
+				}
 				// Keep the component and block cache while collapsed, but render Markdown only on demand.
 				const markdown = this.acquireMarkdown(
 					previousRecords,
@@ -203,69 +247,53 @@ export class AssistantMessageComponent extends Container {
 				);
 				const summary = previousSummaries.get(runStart) ?? new ThinkingSummary();
 				this.thinkingSummaries.set(runStart, summary);
-				const steps = summary.update(thinking);
-				const selected = selectThinkingSteps(steps);
+				const steps = mode === "expanded" ? [] : summary.update(thinking);
+				const activeStep = isStreaming && i === message.content.length - 1 ? steps.at(-1) : undefined;
 				const label = this.hiddenThinkingLabel === "Thinking..." ? "Thinking Steps" : this.hiddenThinkingLabel;
-				// Retain per-step Markdown across mode changes, but render it only in expanded mode.
-				const details =
-					mode === "expanded"
-						? steps.map((step) =>
-								this.acquireMarkdown(
-									previousRecords,
-									`thinking-step:${runStart}:${step.start}`,
-									thinking.slice(step.start, step.end).trim(),
-									"assistant-thinking",
-									message.model,
-									{ color: (text: string) => theme.fg("thinkingText", text) },
-								),
-							)
-						: [];
-				if (mode !== "expanded") {
-					for (const [key, record] of previousRecords) {
-						if (key.startsWith(`thinking-step:${runStart}:`)) this.markdownRecords.set(key, record);
-					}
-				}
 				const thinkingComponent = {
 					render: (width: number): string[] => {
+						if (mode === "expanded") return markdown.render(width);
 						const pad = " ".repeat(this.outputPad);
-						const row = (text: string) => theme.fg("thinkingText", truncateToWidth(pad + text, width));
 						if (mode === "collapsed") {
-							const active = steps.at(-1);
-							return [
-								row(`▸ ${label} · ${active ? `${active.role}: ${active.summary}` : "Reasoning unavailable"}`),
-							];
+							const step = steps.at(-1);
+							if (!step) return [];
+							const prefix = `${pad}▸ ${label} · `;
+							return thinkingHeader(
+								step,
+								width,
+								theme.fg(activeStep ? "accent" : "muted", prefix),
+								" ".repeat(visibleWidth(prefix)),
+								step === activeStep,
+							);
 						}
 						const lines = [
 							theme.fg(
 								"muted",
 								truncateToWidth(
-									`${pad}┆ ${label} · ${mode === "summary" ? "Summary" : "Expanded"} · ${steps.length} ${steps.length === 1 ? "step" : "steps"}`,
+									`${pad}┆ ${label} · Summary · ${steps.length} ${steps.length === 1 ? "step" : "steps"}`,
 									width,
 								),
 							),
 						];
-						if (mode === "summary") {
-							for (const [index, step] of selected.entries()) {
-								lines.push(
-									row(
-										`${index === selected.length - 1 ? "└─" : "├─"} ${steps.indexOf(step) + 1}. ${step.role}: ${step.summary}`,
-									),
-								);
-							}
-						} else if (details.length === 0) {
-							lines.push(...markdown.render(width));
-						} else {
-							for (const [index, detail] of details.entries()) {
-								lines.push(
-									row(`${index === details.length - 1 ? "└─" : "├─"} ${index + 1}. ${steps[index].role}`),
-								);
-								lines.push(...detail.render(width));
-							}
+						for (const [index, step] of steps.entries()) {
+							const last = index === steps.length - 1;
+							const active = step === activeStep;
+							const connector = theme.fg(active ? "accent" : "muted", last ? "└─" : "├─");
+							const continuation = theme.fg("muted", last ? "   " : "│  ");
+							lines.push(
+								...thinkingHeader(
+									{ ...step, summary: `Step ${index + 1} · ${step.summary}` },
+									width,
+									`${pad}${connector} `,
+									pad + continuation,
+									active,
+								),
+							);
 						}
 						return lines;
 					},
 					invalidate: () => {
-						for (const detail of details) detail.invalidate();
+						markdown.invalidate();
 					},
 				};
 				const toggle = () => {
@@ -299,7 +327,7 @@ export class AssistantMessageComponent extends Container {
 										Math.min(tui.terminal.rows * 0.7, tui.transcriptViewportHeight ?? tui.terminal.rows),
 									border: (text) => theme.fg("borderMuted", text),
 									background: (text) => theme.bg("toolPendingBg", text),
-									hint: () => "Click to expand",
+									hint: () => "Click to expand all",
 									onClick: toggle,
 								}),
 								event,
@@ -369,9 +397,7 @@ export class AssistantMessageComponent extends Container {
 		let markdown: Markdown;
 		if (record?.config === config) {
 			markdown = record.markdown;
-			// Only completed step bodies skip transforms; text and full previews retain their refresh behavior.
-			if (!key.startsWith("thinking-step:") || record.text !== text || record.streaming !== this.isStreaming)
-				markdown.setText(text);
+			markdown.setText(text);
 		} else {
 			markdown = new Markdown(text, this.outputPad, 0, this.markdownTheme, defaultTextStyle, {
 				// Ending a stream must rerun transformers without discarding unchanged block layouts.
@@ -386,7 +412,7 @@ export class AssistantMessageComponent extends Container {
 					)(source, width),
 			});
 		}
-		this.markdownRecords.set(key, { config, text, streaming: this.isStreaming, markdown });
+		this.markdownRecords.set(key, { config, text, markdown });
 		return markdown;
 	}
 }
