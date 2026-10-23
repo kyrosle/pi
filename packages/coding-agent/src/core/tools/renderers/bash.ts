@@ -17,6 +17,85 @@ import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
 const BASH_PREVIEW_LINES = 5;
 export const BASH_UPDATE_THROTTLE_MS = 100;
+class ShellCallRenderComponent extends Text {
+	compactToolCall?: Text;
+}
+
+function breakShellChain(line: string): string {
+	const parts: string[] = [];
+	const operators: string[] = [];
+	let start = 0;
+	let quote = "";
+	for (let index = 0; index < line.length; index++) {
+		const character = line[index];
+		if (character === "\\" && quote !== "'") {
+			if (index + 1 === line.length) return line;
+			index++;
+			continue;
+		}
+		if (quote) {
+			if (quote === '"' && (character === "`" || (character === "$" && "({".includes(line[index + 1] ?? " "))))
+				return line;
+			if (character === quote) quote = "";
+			continue;
+		}
+		if (character === '"' || character === "'") {
+			quote = character;
+			continue;
+		}
+		// Keep compound syntax opaque rather than guessing where its command boundaries lie.
+		if (
+			"`()[]{}".includes(character) ||
+			(character === "$" && "({'".includes(line[index + 1] ?? " ")) ||
+			(character === "<" && line[index + 1] === "<")
+		)
+			return line;
+		if (character === "#" && (index === 0 || /[\s&<>;|]/.test(line[index - 1]))) break;
+		// Redirection operators belong to the current command, including their | and & characters.
+		if (
+			(character === ">" && ">|&".includes(line[index + 1] ?? " ")) ||
+			(character === "<" && line[index + 1] === "&") ||
+			(character === "&" && line[index + 1] === ">")
+		) {
+			index++;
+			if (character === "&" && line[index + 1] === ">") index++;
+			continue;
+		}
+		let operator: string;
+		if (character === "&") {
+			if (line[index + 1] !== "&") return line;
+			operator = "&&";
+		} else if (character === "|") {
+			operator = line[index + 1] === "|" ? "||" : line[index + 1] === "&" ? "|&" : "|";
+		} else if (character === ";") {
+			if (line[index + 1] === ";" || line[index + 1] === "&") return line;
+			let next = index + 1;
+			while (next < line.length && /\s/.test(line[next])) next++;
+			if (next === line.length || line[next] === "#") break;
+			operator = ";";
+		} else {
+			continue;
+		}
+		parts.push(line.slice(start, index).trim());
+		operators.push(operator);
+		start = index + operator.length;
+		index += operator.length - 1;
+	}
+	if (parts.length === 0) return line;
+	parts.push(line.slice(start).trim());
+	if (
+		parts.some(
+			(part) =>
+				!part ||
+				/^(?:#|(?:!\s+)*(?:if|elif|then|else|fi|for|while|until|case|esac|select|function|do|done|in)\b)/.test(
+					part,
+				),
+		)
+	)
+		return line;
+	return parts.map((part, index) => (index === 0 ? part : `${operators[index - 1]} ${part}`)).join("\n");
+}
+
 function formatShellCall(args: { command?: string; timeout?: number } | undefined, prompt: string): string {
 	const command = str(args?.command);
 	const timeout = args?.timeout as number | undefined;
@@ -89,13 +168,38 @@ function rebuildBashResultRenderComponent(
 	if (timerText) component.addChild(new Text(`\n${theme.fg("muted", timerText)}`, 0, 0));
 }
 
-/** Shell renderers are shared by bash and powershell, which differ only in the prompt they display. */
-export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> {
+/** Shell renderers are shared by bash and powershell. */
+export function createShellRenderers(
+	prompt: string,
+	label: string,
+): Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> {
 	return {
 		renderCall(args, _theme, context) {
 			startToolTimer(context);
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatShellCall(args as { command?: string; timeout?: number } | undefined, prompt));
+			const renderArgs = args as { command?: string; timeout?: number } | undefined;
+			const text =
+				context.lastComponent instanceof ShellCallRenderComponent
+					? context.lastComponent
+					: new ShellCallRenderComponent("", 0, 0);
+			text.setText(formatShellCall(renderArgs, prompt));
+			const lines = str(renderArgs?.command)?.split(/\r\n|\r|\n/) ?? [];
+			const first = lines.findIndex((line) => line.trim().length > 0);
+			let end = lines.length;
+			while (end > first && lines[end - 1]?.trim().length === 0) end--;
+			const firstLine = lines[first] ?? "";
+			const summaryLine = label === "bash" ? breakShellChain(firstLine) : firstLine;
+			if (first >= 0 && (lines.length > 1 || summaryLine !== firstLine)) {
+				const count = end - first;
+				const entry = formatShellCall({ ...renderArgs, command: summaryLine }, prompt);
+				const heading =
+					count > 1
+						? `${theme.fg("toolTitle", theme.bold(label))}${theme.fg("muted", ` · ${count} lines`)}\n`
+						: "";
+				text.compactToolCall ??= new Text("", 0, 0);
+				text.compactToolCall.setText(heading + entry);
+			} else {
+				text.compactToolCall = undefined;
+			}
 			return text;
 		},
 		renderResult(result, options, _theme, context) {

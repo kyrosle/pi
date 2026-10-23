@@ -20,7 +20,9 @@ To include files or images:
 
 ## Follow Pi's work
 
-Pi shows each tool call and result while it works. Press `Ctrl+O` to expand or collapse tool output. Press `Alt+T` to cycle thinking through collapsed, summary, and expanded views. `Ctrl+T` switches between collapsed thinking and the last non-collapsed view. See [Thinking Steps](settings.md#model-and-thinking) for hover previews and individual click controls.
+Pi shows each tool call and result while it works. Press `Ctrl+O` to cycle collapsed, summary, and expanded tool views. The default `tool-display` extension supplies compact fullscreen titles, statuses and recorded internal-call summaries, with hover previews and individual click-to-expand controls. It works without Grok; see [Tool settings](settings.md#tools) to disable or explicitly load it.
+
+Press `Alt+T` to cycle the same three thinking views. `Ctrl+T` switches between collapsed thinking and the last non-collapsed view. The default `thinking-steps` extension supplies thinking summaries; see [Thinking Steps](settings.md#model-and-thinking) for hover previews and individual click controls.
 
 The startup header lists the instructions and resources Pi loaded. The editor border indicates the current thinking level. The footer updates as the model uses context and reports usage.
 
