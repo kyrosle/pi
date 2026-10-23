@@ -9,6 +9,7 @@ import {
 	PreviewPanel,
 	parseSkillBlock,
 	type Theme,
+	type ToolViewMode,
 } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
@@ -23,7 +24,6 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { grokToolRenderers } from "./grok-ui/tool-renderers.ts";
 
 function isHoverDelay(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 0x7fffffff;
@@ -39,18 +39,20 @@ export class GrokMenu extends Container {
 	constructor(
 		getTheme: () => Theme,
 		keybindings: KeybindingsManager,
-		expanded: boolean,
-		done: (toggle: boolean) => void,
+		mode: ToolViewMode,
+		done: (mode: ToolViewMode | undefined) => void,
 	) {
 		super();
 		this.getTheme = getTheme;
 		this.keybindings = keybindings;
 		this.list = new SelectList(
 			[
-				{ value: "toggle", label: expanded ? "Collapse tool output" : "Expand tool output" },
+				{ value: "collapsed", label: "Collapsed", description: "Tool title only" },
+				{ value: "summary", label: "Summary", description: "Internal calls, with code and output folded" },
+				{ value: "expanded", label: "Expanded", description: "Original code, calls and output" },
 				{ value: "close", label: "Return to prompt" },
 			],
-			2,
+			4,
 			{
 				selectedPrefix: (text) => getTheme().fg("accent", text),
 				selectedText: (text) => getTheme().bg("selectedBg", getTheme().fg("text", text)),
@@ -59,8 +61,14 @@ export class GrokMenu extends Container {
 				noMatch: (text) => getTheme().fg("muted", text),
 			},
 		);
-		this.list.onSelect = (item) => done(item.value === "toggle");
-		this.list.onCancel = () => done(false);
+		this.list.setSelectedIndex(mode === "collapsed" ? 0 : mode === "summary" ? 1 : 2);
+		this.list.onSelect = (item) =>
+			done(
+				item.value === "collapsed" || item.value === "summary" || item.value === "expanded"
+					? item.value
+					: undefined,
+			);
+		this.list.onCancel = () => done(undefined);
 		this.addChild(this.title);
 		this.addChild(new Spacer(1));
 		this.addChild(this.list);
@@ -124,10 +132,6 @@ export default function grokUi(pi: ExtensionAPI): void {
 		const fence = "`".repeat((title.match(/`+/g) ?? []).reduce((length, run) => Math.max(length, run.length + 1), 1));
 		const heading = `**${fence} ${title} ${fence}**\n\n`;
 		return markdown.startsWith(heading) ? markdown : heading + markdown;
-	});
-	pi.registerToolRenderer((_name, next) => {
-		const renderers = next();
-		return renderers ? grokToolRenderers(renderers) : undefined;
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -293,12 +297,12 @@ export default function grokUi(pi: ExtensionAPI): void {
 				ctx.ui.notify("Grok display options require interactive mode.", "info");
 				return;
 			}
-			const toggle = await ctx.ui.custom<boolean>(
+			const mode = await ctx.ui.custom<ToolViewMode | undefined>(
 				(_tui, _theme, keybindings, done) =>
-					new GrokMenu(() => ctx.ui.theme, keybindings, ctx.ui.getToolsExpanded(), done),
+					new GrokMenu(() => ctx.ui.theme, keybindings, ctx.ui.getToolViewMode(), done),
 				{ overlay: true, overlayOptions: { anchor: "center", width: "70%", maxHeight: "80%", margin: 1 } },
 			);
-			if (toggle) ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded());
+			if (mode) ctx.ui.setToolViewMode(mode);
 		},
 	});
 }

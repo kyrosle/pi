@@ -3,6 +3,7 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
 import type { ThinkingViewMode } from "../../../src/core/thinking-view.ts";
+import type { ToolViewMode } from "../../../src/core/tool-view.ts";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
 import { createHarness, createTestUiContext } from "../harness.ts";
@@ -53,17 +54,20 @@ type RebindContext = {
 
 type ReloadCommandContext = {
 	thinkingViewMode: ThinkingViewMode;
+	toolViewMode: ToolViewMode;
+	toolOutputExpanded: boolean;
 	session: {
 		isStreaming: boolean;
 		isCompacting: boolean;
 		reload: (options?: { beforeSessionStart?: () => void | Promise<void> }) => Promise<void>;
 		resourceLoader: { getThemes: () => { themes: [] } };
 		extensionRunner: unknown;
-		modelRegistry: { getError: () => string | undefined };
+		modelRuntime: { getError: () => string | undefined };
 	};
 	settingsManager: {
 		getHttpIdleTimeoutMs: () => number;
 		getThinkingViewMode: () => ThinkingViewMode;
+		getToolViewMode: () => ToolViewMode;
 		getOutputPad: () => 0 | 1;
 		getEditorPaddingX: () => number;
 		getAutocompleteMaxVisible: () => number;
@@ -83,6 +87,7 @@ type ReloadCommandContext = {
 	editor: unknown;
 	defaultEditor: { setPaddingX: (padding: number) => void; setAutocompleteMaxVisible: (maxVisible: number) => void };
 	themeController: { applyFromSettings: () => Promise<void> };
+	applyRuntimeSettings: () => void;
 	resetExtensionUI: () => void;
 	rebuildChatFromMessages: () => void;
 	setupAutocompleteProvider: () => void;
@@ -122,6 +127,8 @@ function createReloadCommandContext(overrides: ReloadCommandContextOverrides = {
 	const editor = overrides.editor ?? {};
 	return {
 		thinkingViewMode: overrides.thinkingViewMode ?? "summary",
+		toolViewMode: overrides.toolViewMode ?? "summary",
+		toolOutputExpanded: overrides.toolOutputExpanded ?? false,
 		session: {
 			isStreaming: false,
 			isCompacting: false,
@@ -130,12 +137,13 @@ function createReloadCommandContext(overrides: ReloadCommandContextOverrides = {
 			},
 			resourceLoader: { getThemes: () => ({ themes: [] }) },
 			extensionRunner: {},
-			modelRegistry: { getError: () => undefined },
+			modelRuntime: { getError: () => undefined },
 			...overrides.session,
 		},
 		settingsManager: {
 			getHttpIdleTimeoutMs: () => 0,
 			getThinkingViewMode: () => "summary",
+			getToolViewMode: () => "summary",
 			getOutputPad: () => 1,
 			getEditorPaddingX: () => 1,
 			getAutocompleteMaxVisible: () => 10,
@@ -155,6 +163,7 @@ function createReloadCommandContext(overrides: ReloadCommandContextOverrides = {
 		editor,
 		defaultEditor: { setPaddingX: () => {}, setAutocompleteMaxVisible: () => {}, ...overrides.defaultEditor },
 		themeController: { applyFromSettings: async () => {}, ...overrides.themeController },
+		applyRuntimeSettings: overrides.applyRuntimeSettings ?? (() => {}),
 		customHeader: overrides.customHeader,
 		builtInHeader: overrides.builtInHeader,
 		resetExtensionUI: overrides.resetExtensionUI ?? (() => {}),
@@ -417,33 +426,39 @@ describe("regression #5943: session_start transient UI", () => {
 		}
 	});
 
-	it("refreshes thinkingViewMode before rebuilding chat during reload", async () => {
+	it("refreshes thinking and tool view modes before rebuilding chat during reload", async () => {
 		initTheme("dark", false);
 		const events: string[] = [];
+		const showError = vi.fn();
 		let context: ReloadCommandContext;
 		context = createReloadCommandContext({
-			settingsManager: { getThinkingViewMode: () => "expanded" },
+			settingsManager: { getThinkingViewMode: () => "expanded", getToolViewMode: () => "expanded" },
 			session: {
 				reload: async (options) => {
 					events.push("reload");
 					await options?.beforeSessionStart?.();
-					events.push(`start:${context.thinkingViewMode}`);
+					events.push(`start:${context.thinkingViewMode}:${context.toolViewMode}`);
 				},
 			},
 			rebuildChatFromMessages: () => {
-				events.push(`rebuild:${context.thinkingViewMode}`);
+				events.push(`rebuild:${context.thinkingViewMode}:${context.toolViewMode}`);
 			},
+			showError,
 		});
 
 		await interactiveModePrototype.handleReloadCommand.call(context);
 
 		expect(context.thinkingViewMode).toBe("expanded");
-		expect(events).toEqual(["reload", "rebuild:expanded", "start:expanded"]);
+		expect(context.toolViewMode).toBe("expanded");
+		expect(context.toolOutputExpanded).toBe(true);
+		expect(events).toEqual(["reload", "rebuild:expanded:expanded", "start:expanded:expanded"]);
+		expect(showError).not.toHaveBeenCalled();
 	});
 
 	it("keeps the reload blocker focused until async reload completes", async () => {
 		initTheme("dark", false);
 		const editor = {};
+		const showError = vi.fn();
 		let focused: unknown;
 		let chatRestored = false;
 		let markReloadWaiting!: () => void;
@@ -457,6 +472,7 @@ describe("regression #5943: session_start transient UI", () => {
 
 		const context = createReloadCommandContext({
 			editor,
+			showError,
 			session: {
 				reload: async (options) => {
 					await options?.beforeSessionStart?.();
@@ -484,5 +500,6 @@ describe("regression #5943: session_start transient UI", () => {
 		await reloadPromise;
 
 		expect(focused).toBe(editor);
+		expect(showError).not.toHaveBeenCalled();
 	});
 });

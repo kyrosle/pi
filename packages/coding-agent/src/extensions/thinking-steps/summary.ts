@@ -1,4 +1,4 @@
-import { splitIncompleteAnsiSuffix, stripAnsi } from "../../../utils/ansi.ts";
+import { splitIncompleteAnsiSuffix, stripAnsi } from "../../utils/ansi.ts";
 
 const MAX_EXCERPT_SOURCE = 512;
 const ANSI_STRING_START = /\u001b[\]PX^_]|[\u0090\u0098\u009d-\u009f]/g;

@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { isImageLine, Markdown, Text, TuiAltScreen, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
+import { thinkingStepsRenderer } from "../src/extensions/thinking-steps/renderer.ts";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { getMarkdownTheme, initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -10,6 +11,11 @@ import { stripAnsi } from "../src/utils/ansi.ts";
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+
+function createAssistantMessageComponent(...args: ConstructorParameters<typeof AssistantMessageComponent>) {
+	args[9] ??= thinkingStepsRenderer;
+	return new AssistantMessageComponent(...args);
+}
 
 function createAssistantMessage(
 	content: AssistantMessage["content"],
@@ -63,7 +69,7 @@ describe("AssistantMessageComponent", () => {
 				{ type: "thinking", thinking: "Inspect the cache\n\nVerify the result" },
 				{ type: "text", text: "Answer" },
 			]);
-			const component = new AssistantMessageComponent(message, mode);
+			const component = createAssistantMessageComponent(message, mode);
 			const childRender = vi.spyOn(component.children[0], "render");
 			const first = component.render(80);
 			for (let frame = 0; frame < 20; frame++) expect(component.render(80)).toBe(first);
@@ -89,7 +95,7 @@ describe("AssistantMessageComponent", () => {
 	test("adds OSC 133 zone markers to assistant messages without tool calls", () => {
 		initTheme("dark");
 
-		const component = new AssistantMessageComponent(createAssistantMessage([{ type: "text", text: "hello" }]));
+		const component = createAssistantMessageComponent(createAssistantMessage([{ type: "text", text: "hello" }]));
 		const lines = component.render(40);
 
 		expect(lines).not.toHaveLength(0);
@@ -100,7 +106,7 @@ describe("AssistantMessageComponent", () => {
 	test("does not add OSC 133 zone markers when assistant message contains tool calls", () => {
 		initTheme("dark");
 
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([
 				{ type: "text", text: "calling tool" },
 				{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "file.txt" } },
@@ -116,7 +122,7 @@ describe("AssistantMessageComponent", () => {
 	test("renders length stops with neutral truncation wording", () => {
 		initTheme("dark");
 
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([{ type: "thinking", thinking: "private reasoning" }], { stopReason: "length" }),
 			true,
 		);
@@ -129,7 +135,7 @@ describe("AssistantMessageComponent", () => {
 	test("coalesces adjacent thinking blocks into one hidden thinking label", () => {
 		initTheme("dark");
 
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([
 				{ type: "thinking", thinking: "first thought" },
 				{ type: "thinking", thinking: "" },
@@ -173,6 +179,37 @@ describe("AssistantMessageComponent", () => {
 		expect(withText.render(80).map((line) => stripAnsi(line).trim())).toEqual(["", "answer"]);
 	});
 
+	test("renders custom collapsed thinking when its hidden label is empty", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "reasoning" },
+				{ type: "text", text: "answer" },
+			]),
+			"collapsed",
+			undefined,
+			"",
+			1,
+			[],
+			undefined,
+			undefined,
+			undefined,
+			(_thinking, _theme, context) => {
+				expect(context.mode).toBe("collapsed");
+				expect(context.hiddenLabel).toBe("");
+				return new Text("Extension thinking", 0, 0);
+			},
+		);
+
+		expect(component.render(80).map((line) => stripAnsi(line).trim())).toEqual([
+			"",
+			"Extension thinking",
+			"",
+			"answer",
+		]);
+	});
+
 	test("keeps label row and spacing for hidden thinking with a label", () => {
 		initTheme("dark");
 
@@ -188,7 +225,7 @@ describe("AssistantMessageComponent", () => {
 
 	test("collapses individual thinking runs when clicked", () => {
 		initTheme("dark");
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([
 				{ type: "thinking", thinking: "first reasoning" },
 				{ type: "text", text: "answer" },
@@ -226,7 +263,7 @@ describe("AssistantMessageComponent", () => {
 	test("wraps thinking summaries safely at narrow and Unicode widths without rendering Markdown", () => {
 		initTheme("dark");
 		let transforms = 0;
-		const component = new AssistantMessageComponent(undefined, true, undefined, "Thinking...", 1, [
+		const component = createAssistantMessageComponent(undefined, true, undefined, "Thinking...", 1, [
 			(text) => {
 				transforms++;
 				return text;
@@ -255,7 +292,7 @@ describe("AssistantMessageComponent", () => {
 
 	test("shows every step in source order while streaming, on completion, and after restore", () => {
 		initTheme("dark");
-		const component = new AssistantMessageComponent(undefined, "summary");
+		const component = createAssistantMessageComponent(undefined, "summary");
 		const blocks = [
 			"Inspect",
 			"Failed to open file",
@@ -273,7 +310,7 @@ describe("AssistantMessageComponent", () => {
 			expect(streaming).toHaveLength(2 + count);
 			component.updateContent(message, false);
 			expect(component.render(80).map(stripAnsi)).toEqual(streaming.map(stripAnsi));
-			expect(component.render(80)).toEqual(new AssistantMessageComponent(message, "summary").render(80));
+			expect(component.render(80)).toEqual(createAssistantMessageComponent(message, "summary").render(80));
 			expect(message).toEqual(original);
 		}
 		const lines = component.render(80).map(stripAnsi);
@@ -297,7 +334,7 @@ describe("AssistantMessageComponent", () => {
 	test("reuses completed thinking code layouts across folding and subsequent streamed updates", () => {
 		initTheme("dark");
 		let highlights = 0;
-		const component = new AssistantMessageComponent(undefined, true, {
+		const component = createAssistantMessageComponent(undefined, true, {
 			...getMarkdownTheme(),
 			highlightCode: (code) => {
 				highlights++;
@@ -328,7 +365,7 @@ describe("AssistantMessageComponent", () => {
 		const highlight = vi.fn((code: string) => code.split("\n"));
 		const source =
 			"Inspect first\n```ts\nconst first = 1;\n```\n\nInspect second\n```ts\nconst second = 2;\n```\n\nTail";
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([{ type: "thinking", thinking: source }]),
 			"summary",
 			{
@@ -362,7 +399,7 @@ describe("AssistantMessageComponent", () => {
 		"emphasizes only the currently streaming step in %s and clears it when text begins",
 		(mode) => {
 			initTheme("dark");
-			const component = new AssistantMessageComponent(undefined, mode);
+			const component = createAssistantMessageComponent(undefined, mode);
 			const message = createAssistantMessage([{ type: "thinking", thinking: "Inspect input\n\nRun tests" }]);
 			component.updateContent(message, true);
 			const active = theme.style(mode === "collapsed" ? "Run tests" : "Step 2 · Run tests", {
@@ -389,7 +426,7 @@ describe("AssistantMessageComponent", () => {
 	test("uses role colors and wraps summaries with tree continuations instead of truncating them", () => {
 		initTheme("dark");
 		const long = "Inspect configuration across several directories and preserve the final detail";
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([{ type: "thinking", thinking: `${long}\n\nCompare options\n\nRun tests` }]),
 			"summary",
 		);
@@ -426,7 +463,7 @@ describe("AssistantMessageComponent", () => {
 		expect(opened).toContain("Compare options");
 		expect(opened).toContain("Run tests");
 		expect(component.render(120)).toEqual(
-			new AssistantMessageComponent(
+			createAssistantMessageComponent(
 				createAssistantMessage([{ type: "thinking", thinking: `${long}\n\nCompare options\n\nRun tests` }]),
 				"expanded",
 			).render(120),
@@ -442,7 +479,7 @@ describe("AssistantMessageComponent", () => {
 		const thinking = blocks.join("\n\n");
 		const transform = vi.fn((source: string) => source);
 		const message = createAssistantMessage(blocks.map((source) => ({ type: "thinking", thinking: source })));
-		const component = new AssistantMessageComponent(message, "expanded", undefined, "Thinking...", 1, [transform]);
+		const component = createAssistantMessageComponent(message, "expanded", undefined, "Thinking...", 1, [transform]);
 		const markdown = new Markdown(thinking, 1, 0, getMarkdownTheme(), {
 			color: (text: string) => theme.fg("thinkingText", text),
 			italic: true,
@@ -472,7 +509,7 @@ describe("AssistantMessageComponent", () => {
 		];
 		const message = createAssistantMessage([{ type: "thinking", thinking: paragraphs.join("\n\n") }]);
 		const original = structuredClone(message);
-		const component = new AssistantMessageComponent(message, "summary");
+		const component = createAssistantMessageComponent(message, "summary");
 		const summary = stripAnsi(component.render(120).join("\n"));
 		expect(summary).toContain("Summary · 7 steps");
 		expect(summary).toContain(paragraphs[2]);
@@ -481,7 +518,7 @@ describe("AssistantMessageComponent", () => {
 		expect(summary).toContain(paragraphs[5]);
 		expect(summary).not.toContain("No code is needed.");
 		expect(clickRenderedRow(component, "Step 2 ·")?.handled).toBe(true);
-		expect(component.render(120)).toEqual(new AssistantMessageComponent(message, "expanded").render(120));
+		expect(component.render(120)).toEqual(createAssistantMessageComponent(message, "expanded").render(120));
 		const expanded = stripAnsi(component.render(120).join("\n"));
 		expect(expanded).not.toMatch(/Thinking Steps|Step \d|[├└]─/u);
 		let previous = -1;
@@ -498,7 +535,7 @@ describe("AssistantMessageComponent", () => {
 
 	test("toggles the entire clicked run from a step or body while leaving other runs unchanged", () => {
 		initTheme("dark");
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([
 				{
 					type: "thinking",
@@ -531,7 +568,7 @@ describe("AssistantMessageComponent", () => {
 	test("preserves run overrides through append and layout changes and clears them on global mode changes", () => {
 		initTheme("dark");
 		const source = "Inspect first\nfirst hidden detail\n\nInspect second\nsecond hidden detail";
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([{ type: "thinking", thinking: source }]),
 			"summary",
 		);
@@ -567,7 +604,7 @@ describe("AssistantMessageComponent", () => {
 			const tui = new TuiAltScreen(terminal);
 			tui.setMouseHoverEnabled(true);
 			const source = "Inspect first\nfirst hidden detail\n\nInspect second\nsecond hidden detail";
-			const component = new AssistantMessageComponent(
+			const component = createAssistantMessageComponent(
 				createAssistantMessage([{ type: "thinking", thinking: source }]),
 				mode,
 				undefined,
@@ -619,7 +656,7 @@ describe("AssistantMessageComponent", () => {
 		initTheme("dark");
 		const paragraphs = Array.from({ length: 100 }, (_, i) => `Inspect section ${i}. Additional detail ${i}.`);
 		const transform = vi.fn((text: string) => text);
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([{ type: "thinking", thinking: paragraphs.join("\n\n") }]),
 			"summary",
 			undefined,
@@ -640,7 +677,7 @@ describe("AssistantMessageComponent", () => {
 	test("preserves opaque terminal image commands from expanded Markdown transformers", () => {
 		initTheme("dark");
 		const image = "\x1b[4A\x1b]1337;File=inline=1;size=3;width=2;height=auto:AAAA\x07";
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([
 				{ type: "thinking", thinking: "Inspect diagram" },
 				{ type: "text", text: "Done" },
@@ -664,7 +701,7 @@ describe("AssistantMessageComponent", () => {
 			initTheme("dark");
 			const terminal = new VirtualTerminal(60, 16);
 			const tui = new TuiAltScreen(terminal);
-			const component = new AssistantMessageComponent(undefined, mode, undefined, "Thinking...", 1, [], tui);
+			const component = createAssistantMessageComponent(undefined, mode, undefined, "Thinking...", 1, [], tui);
 			const thinking = "First\n\nSecond\n\nThird";
 			component.updateContent(createAssistantMessage([{ type: "thinking", thinking }]), true);
 			tui.addChild(new Text(Array.from({ length: 60 }, (_, index) => `history ${index}`).join("\n"), 0, 0));
@@ -700,7 +737,7 @@ describe("AssistantMessageComponent", () => {
 			const terminal = new VirtualTerminal(100, 30);
 			const tui = new TuiAltScreen(terminal);
 			tui.setMouseHoverEnabled(true);
-			const component = new AssistantMessageComponent(undefined, mode, undefined, "Thinking...", 1, [], tui);
+			const component = createAssistantMessageComponent(undefined, mode, undefined, "Thinking...", 1, [], tui);
 			const thinking = Array.from({ length: 60 }, (_, i) => `reasoning ${i}`).join("\n");
 			component.updateContent(createAssistantMessage([{ type: "thinking", thinking }]), true);
 			tui.addChild(component);
@@ -746,7 +783,7 @@ describe("AssistantMessageComponent", () => {
 		const tui = new TuiAltScreen(new VirtualTerminal(80, 24));
 		tui.setHoverPreviewDelay(100);
 		let transforms = 0;
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			undefined,
 			true,
 			undefined,
@@ -803,7 +840,7 @@ describe("AssistantMessageComponent", () => {
 		tui.setHoverPreviewDelay(100);
 		const first = { type: "thinking" as const, thinking: "Inspect first\nfirst hidden detail" };
 		const message = createAssistantMessage([first]);
-		const component = new AssistantMessageComponent(message, "summary", undefined, "Thinking...", 1, [], tui);
+		const component = createAssistantMessageComponent(message, "summary", undefined, "Thinking...", 1, [], tui);
 		const y = component.render(100).findIndex((line) => stripAnsi(line).includes("Step 1 · Inspect first"));
 		expect(y).toBeGreaterThanOrEqual(0);
 		const hover: TuiMouseEvent = {
@@ -853,7 +890,7 @@ describe("AssistantMessageComponent", () => {
 	test("uses configured output padding for text and thinking", () => {
 		initTheme("dark");
 
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([
 				{ type: "text", text: "hello" },
 				{ type: "thinking", thinking: "reasoning" },
@@ -878,7 +915,7 @@ describe("AssistantMessageComponent", () => {
 		initTheme("dark");
 		const calls: string[] = [];
 		const message = createAssistantMessage([{ type: "text", text: "The result is $x^2$." }]);
-		const component = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, [
+		const component = createAssistantMessageComponent(message, false, undefined, "Thinking...", 1, [
 			(markdown, context) => {
 				calls.push("formula");
 				expect(context).toEqual({
@@ -903,7 +940,7 @@ describe("AssistantMessageComponent", () => {
 		initTheme("dark");
 		const streamingStates: boolean[] = [];
 		const message = createAssistantMessage([{ type: "text", text: "partial" }]);
-		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, [
+		const component = createAssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, [
 			(markdown, context) => {
 				streamingStates.push(context.isStreaming);
 				return context.isStreaming ? markdown : `${markdown} transformed`;
@@ -921,7 +958,7 @@ describe("AssistantMessageComponent", () => {
 	test("reapplies Markdown transformers when available width changes", () => {
 		initTheme("dark");
 		const availableWidths: number[] = [];
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([{ type: "text", text: "answer" }]),
 			false,
 			undefined,
@@ -944,7 +981,7 @@ describe("AssistantMessageComponent", () => {
 	test("continues the Markdown transformer chain when a transformer throws", () => {
 		initTheme("dark");
 		const calls: string[] = [];
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([{ type: "text", text: "still visible" }]),
 			false,
 			undefined,
@@ -976,7 +1013,7 @@ describe("AssistantMessageComponent", () => {
 			{ type: "text", text: "answer" },
 			{ type: "thinking", thinking: "reasoning" },
 		]);
-		const component = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, [
+		const component = createAssistantMessageComponent(message, false, undefined, "Thinking...", 1, [
 			(markdown, { messageType }) => {
 				return `${messageType}:${markdown}`;
 			},
@@ -1023,10 +1060,10 @@ describe("AssistantMessageComponent", () => {
 			],
 		];
 
-		const streaming = new AssistantMessageComponent();
+		const streaming = createAssistantMessageComponent();
 		for (const content of steps) {
 			streaming.updateContent(createAssistantMessage(content), true);
-			const fresh = new AssistantMessageComponent();
+			const fresh = createAssistantMessageComponent();
 			fresh.updateContent(createAssistantMessage(content), true);
 			expect(streaming.render(60)).toEqual(fresh.render(60));
 		}
@@ -1042,7 +1079,7 @@ describe("AssistantMessageComponent", () => {
 				return code.split("\n");
 			},
 		};
-		const component = new AssistantMessageComponent(undefined, false, markdownTheme);
+		const component = createAssistantMessageComponent(undefined, false, markdownTheme);
 
 		component.updateContent(
 			createAssistantMessage([{ type: "text", text: "```ts\nconst a = 1;\n```\n\nFirst" }]),
@@ -1072,7 +1109,7 @@ describe("AssistantMessageComponent", () => {
 	test("runs final transformers when streaming ends without new text", () => {
 		initTheme("dark");
 		const message = createAssistantMessage([{ type: "text", text: "answer" }]);
-		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, [
+		const component = createAssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, [
 			(markdown, { isStreaming }) => (isStreaming ? markdown : `final:${markdown}`),
 		]);
 
@@ -1090,7 +1127,7 @@ describe("AssistantMessageComponent", () => {
 			...getMarkdownTheme(),
 			heading: (text: string) => `${headingPrefix}${text}`,
 		};
-		const component = new AssistantMessageComponent(
+		const component = createAssistantMessageComponent(
 			createAssistantMessage([{ type: "text", text: "# Title" }]),
 			false,
 			markdownTheme,
@@ -1107,13 +1144,13 @@ describe("AssistantMessageComponent", () => {
 		(stopReason) => {
 			initTheme("dark");
 			const message = createAssistantMessage([{ type: "text", text: "```ts\nconst a = 1;\n```\n\nPartial" }]);
-			const component = new AssistantMessageComponent();
+			const component = createAssistantMessageComponent();
 			component.updateContent(message, true);
 			component.render(60);
 			message.stopReason = stopReason;
 			message.errorMessage = "fixture error";
 			component.updateContent(message, false);
-			const expected = new AssistantMessageComponent(message).render(60);
+			const expected = createAssistantMessageComponent(message).render(60);
 			expect(component.render(60)).toEqual(expected);
 			expect(component.render(60)).toEqual(expected);
 		},
@@ -1123,7 +1160,7 @@ describe("AssistantMessageComponent", () => {
 		initTheme("dark");
 		let revision = 0;
 		const message = createAssistantMessage([{ type: "text", text: "answer" }]);
-		const component = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, [
+		const component = createAssistantMessageComponent(message, false, undefined, "Thinking...", 1, [
 			(text, { model }) => `${model}:${revision}:${text}`,
 		]);
 		component.render(60);

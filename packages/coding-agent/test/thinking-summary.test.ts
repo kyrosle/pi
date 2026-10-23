@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { ThinkingSummary } from "../src/modes/interactive/components/thinking-summary.ts";
+import { ThinkingSummary } from "../src/extensions/thinking-steps/summary.ts";
 
 describe("ThinkingSummary", () => {
 	test("groups heading bodies and list continuations, with roles that do not imply success", () => {
