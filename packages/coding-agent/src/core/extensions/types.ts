@@ -81,6 +81,8 @@ import type { Settings } from "../settings-manager.ts";
 import type { SlashCommandInfo } from "../slash-commands.ts";
 import type { SourceInfo } from "../source-info.ts";
 import type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
+import type { ThinkingViewMode } from "../thinking-view.ts";
+import type { ToolViewMode } from "../tool-view.ts";
 import type { BashOperations } from "../tools/bash.ts";
 import type { EditToolDetails } from "../tools/edit.ts";
 import type {
@@ -297,6 +299,12 @@ export interface ExtensionUIContext {
 
 	/** Set tool output expansion state. */
 	setToolsExpanded(expanded: boolean): void;
+
+	/** Get the global tool display mode. */
+	getToolViewMode(): ToolViewMode;
+
+	/** Set and persist the global tool display mode, resetting per-tool expansion overrides. */
+	setToolViewMode(mode: ToolViewMode): void;
 }
 
 // ============================================================================
@@ -489,6 +497,8 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	isPartial: boolean;
 	/** Whether the result view is expanded. */
 	expanded: boolean;
+	/** Effective display mode, including a per-tool expansion override. */
+	toolViewMode?: ToolViewMode;
 	/** Whether inline images are currently shown in the TUI. */
 	showImages: boolean;
 	/** Whether the current result is an error. */
@@ -1574,6 +1584,32 @@ export interface MarkdownTransformContext {
 
 export type MarkdownTransformer = (markdown: string, context: MarkdownTransformContext) => string;
 
+export type ThinkingRenderComponent = Component & { dispose?(): void };
+
+export interface ThinkingRenderContext {
+	/** Effective display mode, including a per-block expansion override. */
+	mode: ThinkingViewMode;
+	isStreaming: boolean;
+	/** Whether this run is the current streaming tail. */
+	active: boolean;
+	hiddenLabel: string;
+	outputPad: number;
+	/** Original thinking Markdown, kept stable across streaming updates. */
+	markdown: Component;
+	lastComponent?: ThinkingRenderComponent;
+	tui?: TUI;
+	/** Expand or restore this thinking run without changing the global mode. */
+	setExpanded(expanded: boolean): void;
+	/** Invalidate this message's rendered lines and request a redraw. */
+	invalidate(): void;
+}
+
+export type ThinkingRenderer = (
+	thinking: string,
+	theme: Theme,
+	context: ThinkingRenderContext,
+) => ThinkingRenderComponent | undefined;
+
 export interface EntryRenderOptions {
 	expanded: boolean;
 }
@@ -1745,6 +1781,9 @@ export interface ExtensionAPI {
 
 	/** Register a transformer for user and assistant Markdown before Pi renders it in the interactive transcript. */
 	registerMarkdownTransformer(transformer: MarkdownTransformer): void;
+
+	/** Render thinking in the interactive transcript. The first registered renderer in extension load order wins. */
+	registerThinkingRenderer(renderer: ThinkingRenderer): void;
 
 	/** Register a custom renderer for CustomEntry. Custom entries do not participate in LLM context. */
 	registerEntryRenderer<T = unknown>(customType: string, renderer: EntryRenderer<T>): void;
@@ -2306,6 +2345,7 @@ export interface Extension {
 	messageRenderers: Map<string, MessageRenderer>;
 	toolRenderers?: ToolRendererResolver[];
 	markdownTransformer?: MarkdownTransformer;
+	thinkingRenderer?: ThinkingRenderer;
 	entryRenderers?: Map<string, EntryRenderer>;
 	commands: Map<string, RegisteredCommand>;
 	flags: Map<string, ExtensionFlag>;

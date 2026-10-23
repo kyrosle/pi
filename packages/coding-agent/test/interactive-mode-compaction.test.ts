@@ -150,7 +150,7 @@ describe("InteractiveMode compaction events", () => {
 			autoCompactionLoader: undefined,
 			defaultEditor: {},
 			statusContainer: { clear: vi.fn() },
-			chatContainer: { clear: vi.fn() },
+			chatContainer: { children: [], clear: vi.fn() },
 			sessionManager: { buildContextEntries: vi.fn().mockReturnValue([latestCompaction, previousCompaction]) },
 			renderSessionEntries: vi.fn(),
 			addMessageToChat: vi.fn(),

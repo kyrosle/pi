@@ -23,6 +23,7 @@ import { writeHeapSnapshot } from "node:v8";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Container, ScrollView, type Terminal, Text, TuiAltScreen, VStack } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../src/core/extensions/types.ts";
+import { thinkingStepsRenderer } from "../src/extensions/thinking-steps/renderer.ts";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { createMermaidMarkdownTransformer } from "../src/modes/interactive/components/mermaid.ts";
 import { getMarkdownTheme, initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -148,7 +149,18 @@ function createMessage(text: string): AssistantMessage {
 }
 
 function createComponent(transformers: readonly MarkdownTransformer[]): AssistantMessageComponent {
-	return new AssistantMessageComponent(undefined, false, getMarkdownTheme(), "Thinking...", 1, transformers);
+	return new AssistantMessageComponent(
+		undefined,
+		false,
+		getMarkdownTheme(),
+		"Thinking...",
+		1,
+		transformers,
+		undefined,
+		undefined,
+		undefined,
+		thinkingStepsRenderer,
+	);
 }
 
 function average(values: readonly number[]): number {

@@ -1,14 +1,18 @@
 import { homedir } from "node:os";
 import * as path from "node:path";
-import { type AutocompleteProvider, CombinedAutocompleteProvider } from "@earendil-works/pi-tui";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { type AutocompleteProvider, CombinedAutocompleteProvider, Text } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import { type Component, Container, type Focusable, type TUI } from "../../tui/src/tui.ts";
 import { TuiMainScreen } from "../../tui/src/tui-main-screen.ts";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
-import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
+import type { AutocompleteProviderFactory, ExtensionUIContext } from "../src/core/extensions/types.ts";
 import type { QuietStartup } from "../src/core/settings-manager.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
+import type { ToolViewMode } from "../src/core/tool-view.ts";
+import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
+import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -71,6 +75,134 @@ type ExtensionFixture = {
 	path: string;
 	sourceInfo?: SourceInfo;
 };
+
+describe("InteractiveMode thinking renderer lifecycle", () => {
+	beforeAll(() => initTheme("dark"));
+
+	function createMessage(dispose: () => void): AssistantMessageComponent {
+		return new AssistantMessageComponent(
+			fauxAssistantMessage([{ type: "thinking", thinking: "Original reasoning" }]),
+			"summary",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			() => Object.assign(new Text("Thinking view", 0, 0), { dispose }),
+		);
+	}
+
+	test("rebuilding history releases thinking renderers before rendering replacements", () => {
+		const dispose = vi.fn();
+		const otherDispose = vi.fn();
+		const chatContainer = new Container();
+		chatContainer.addChild(createMessage(dispose));
+		chatContainer.addChild(Object.assign(new Text("Other component", 0, 0), { dispose: otherDispose }));
+		const fixture = {
+			chatContainer,
+			sessionManager: { buildContextEntries: () => [] },
+			renderSessionEntries: vi.fn(() => {
+				expect(dispose).toHaveBeenCalledOnce();
+				expect(chatContainer.children).toEqual([]);
+			}),
+		};
+		const rebuild = Reflect.get(InteractiveMode.prototype, "rebuildChatFromMessages") as (
+			this: typeof fixture,
+		) => void;
+		rebuild.call(fixture);
+		expect(fixture.renderSessionEntries).toHaveBeenCalledOnce();
+		expect(otherDispose).not.toHaveBeenCalled();
+	});
+
+	test("replacing the current session disposes its messages before rendering the next session", () => {
+		const dispose = vi.fn();
+		const message = createMessage(dispose);
+		const chatContainer = new Container();
+		chatContainer.addChild(message);
+		const fixture = {
+			chatContainer,
+			loadedResourcesContainer: new Container(),
+			pendingMessagesContainer: new Container(),
+			compactionQueuedMessages: ["queued"],
+			streamingComponent: message as AssistantMessageComponent | undefined,
+			streamingMessage: {},
+			pendingTools: new Map([["old", {}]]),
+			renderInitialMessages: vi.fn(() => expect(dispose).toHaveBeenCalledOnce()),
+		};
+		const render = Reflect.get(InteractiveMode.prototype, "renderCurrentSessionState") as (
+			this: typeof fixture,
+		) => void;
+		render.call(fixture);
+		expect(chatContainer.children).toEqual([]);
+		expect(fixture.streamingComponent).toBeUndefined();
+		expect(fixture.streamingMessage).toBeUndefined();
+		expect(fixture.pendingTools.size).toBe(0);
+	});
+
+	test("an unfinished response is disposed when agent_end removes its streaming component", async () => {
+		const dispose = vi.fn();
+		const retainedDispose = vi.fn();
+		const message = createMessage(dispose);
+		const retained = createMessage(retainedDispose);
+		const chatContainer = new Container();
+		chatContainer.addChild(retained);
+		chatContainer.addChild(message);
+		const fixture = {
+			chatContainer,
+			isInitialized: true,
+			footer: { invalidate: vi.fn() },
+			programStatus: { handleEvent: vi.fn() },
+			settingsManager: { getShowTerminalProgress: () => false },
+			clearStatusIndicator: vi.fn(),
+			streamingComponent: message as AssistantMessageComponent | undefined,
+			streamingMessage: {},
+			pendingTools: new Map(),
+			ui: { requestRender: vi.fn() },
+		};
+		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
+			this: typeof fixture,
+			event: { type: "agent_end" },
+		) => Promise<void>;
+		await handleEvent.call(fixture, { type: "agent_end" });
+		expect(dispose).toHaveBeenCalledOnce();
+		expect(retainedDispose).not.toHaveBeenCalled();
+		expect(chatContainer.children).toEqual([retained]);
+		expect(fixture.streamingComponent).toBeUndefined();
+	});
+
+	test("stopping releases thinking renderers after writing the exit transcript", () => {
+		const dispose = vi.fn();
+		const chatContainer = new Container();
+		chatContainer.addChild(createMessage(dispose));
+		const fixture = {
+			chatContainer,
+			disposeActiveSelector: vi.fn(),
+			settingsManager: {
+				getShowTerminalProgress: () => false,
+				getFullscreenExitOutput: () => "transcript",
+			},
+			clearStatusIndicator: vi.fn(),
+			themeController: { disableAutoSync: vi.fn() },
+			clearExtensionTerminalInputListeners: vi.fn(),
+			footer: { dispose: vi.fn() },
+			footerDataProvider: { dispose: vi.fn() },
+			unsubscribe: vi.fn(),
+			isInitialized: true,
+			stopInteractiveTui: vi.fn(() => {
+				expect(dispose).not.toHaveBeenCalled();
+				expect(renderAll(chatContainer)).toContain("Thinking view");
+			}),
+			unregisterSignalHandlers: vi.fn(),
+		};
+		const stop = Reflect.get(InteractiveMode.prototype, "stop") as (this: typeof fixture) => void;
+		stop.call(fixture);
+		expect(fixture.stopInteractiveTui).toHaveBeenCalledWith("transcript");
+		expect(dispose).toHaveBeenCalledOnce();
+		expect(fixture.unregisterSignalHandlers).toHaveBeenCalledOnce();
+	});
+});
 
 describe("InteractiveMode.showStatus", () => {
 	beforeAll(() => {
@@ -143,28 +275,99 @@ describe("InteractiveMode.showManagedToolStatus", () => {
 	});
 });
 
-describe("InteractiveMode.setToolsExpanded", () => {
-	test("applies expansion state to the active header and chat entries", () => {
+describe("InteractiveMode tool view", () => {
+	beforeAll(() => initTheme("dark"));
+
+	type ToolViewFixture = {
+		toolViewMode: ToolViewMode;
+		toolOutputExpanded: boolean;
+		builtInHeader: { setExpanded: ReturnType<typeof vi.fn> };
+		loadedResourcesContainer: { children: Array<{ setExpanded: ReturnType<typeof vi.fn> }> };
+		chatContainer: { children: Array<ToolExecutionComponent | { setExpanded: ReturnType<typeof vi.fn> }> };
+		settingsManager: { setToolViewMode: ReturnType<typeof vi.fn> };
+		showStatus: ReturnType<typeof vi.fn>;
+		setToolsExpanded(expanded: boolean): void;
+		setToolViewMode(mode: ToolViewMode): void;
+	};
+	const methods = InteractiveMode.prototype as unknown as {
+		setToolsExpanded(this: ToolViewFixture, expanded: boolean): void;
+		setToolViewMode(this: ToolViewFixture, mode: ToolViewMode): void;
+		toggleToolOutputExpansion(this: ToolViewFixture): void;
+		createExtensionUIContext(this: ToolViewFixture): ExtensionUIContext;
+	};
+
+	function createToolViewFixture(): ToolViewFixture {
 		const header = { setExpanded: vi.fn() };
 		const loadedResourcesChild = { setExpanded: vi.fn() };
 		const chatChild = { setExpanded: vi.fn() };
-		const fakeThis: any = {
+		return {
+			toolViewMode: "summary",
 			toolOutputExpanded: false,
-			customHeader: undefined,
 			builtInHeader: header,
 			loadedResourcesContainer: { children: [loadedResourcesChild] },
 			chatContainer: { children: [chatChild] },
-			ui: { requestRender: vi.fn() },
+			settingsManager: { setToolViewMode: vi.fn() },
 			showStatus: vi.fn(),
+			setToolViewMode: methods.setToolViewMode,
+			setToolsExpanded: methods.setToolsExpanded,
 		};
+	}
 
-		(InteractiveMode as any).prototype.setToolsExpanded.call(fakeThis, true);
+	test.each<ToolViewMode>(["collapsed", "summary", "expanded"])(
+		"applies %s to tools and expansion state to the header and other entries",
+		(mode) => {
+			const fixture = createToolViewFixture();
+			const tool = new ToolExecutionComponent(
+				"read",
+				"tool-1",
+				{ path: "example.ts" },
+				{},
+				undefined,
+				new TuiMainScreen(new VirtualTerminal(80, 24)),
+				"/tmp",
+			);
+			const setToolViewMode = vi.spyOn(tool, "setToolViewMode");
+			fixture.chatContainer.children.push(tool);
 
-		expect(fakeThis.toolOutputExpanded).toBe(true);
-		expect(header.setExpanded).toHaveBeenCalledWith(true);
-		expect(loadedResourcesChild.setExpanded).toHaveBeenCalledWith(true);
-		expect(chatChild.setExpanded).toHaveBeenCalledWith(true);
-		expect(fakeThis.showStatus).toHaveBeenCalledWith("Tool output: expanded");
+			fixture.setToolViewMode(mode);
+
+			expect(fixture.toolViewMode).toBe(mode);
+			expect(fixture.toolOutputExpanded).toBe(mode === "expanded");
+			expect(fixture.settingsManager.setToolViewMode).toHaveBeenCalledWith(mode);
+			expect(fixture.builtInHeader.setExpanded).toHaveBeenCalledWith(mode === "expanded");
+			expect(fixture.loadedResourcesContainer.children[0].setExpanded).toHaveBeenCalledWith(mode === "expanded");
+			expect(fixture.chatContainer.children[0].setExpanded).toHaveBeenCalledWith(mode === "expanded");
+			expect(setToolViewMode).toHaveBeenCalledWith(mode);
+			expect(fixture.showStatus).toHaveBeenCalledWith(`Tool view: ${mode}`);
+
+			tool.setExpanded(true);
+			fixture.setToolViewMode(mode);
+			expect(setToolViewMode).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	test("cycles summary, expanded, collapsed, and back to summary", () => {
+		const fixture = createToolViewFixture();
+		for (const mode of ["expanded", "collapsed", "summary"]) {
+			methods.toggleToolOutputExpansion.call(fixture);
+			expect(fixture.toolViewMode).toBe(mode);
+		}
+		expect(fixture.settingsManager.setToolViewMode.mock.calls).toEqual([["expanded"], ["collapsed"], ["summary"]]);
+	});
+
+	test("exposes all modes and maps the boolean extension API to expanded and summary", () => {
+		const fixture = createToolViewFixture();
+		const ui = methods.createExtensionUIContext.call(fixture);
+
+		ui.setToolViewMode("collapsed");
+		expect(ui.getToolViewMode()).toBe("collapsed");
+		expect(ui.getToolsExpanded()).toBe(false);
+		ui.setToolsExpanded(true);
+		expect(ui.getToolViewMode()).toBe("expanded");
+		expect(ui.getToolsExpanded()).toBe(true);
+		ui.setToolsExpanded(false);
+		expect(ui.getToolViewMode()).toBe("summary");
+		expect(ui.getToolsExpanded()).toBe(false);
 	});
 });
 

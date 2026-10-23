@@ -23,6 +23,7 @@ import { VirtualTerminal } from "../../../tui/test/virtual-terminal.ts";
 import grokUi, { GrokMenu } from "../../examples/extensions/grok-ui.ts";
 import type { ToolRenderContext, ToolRenderers } from "../../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
+import toolDisplay from "../../src/extensions/tool-display/index.ts";
 import { createChatViewport } from "../../src/modes/interactive/chat-viewport.ts";
 import { AssistantMessageComponent } from "../../src/modes/interactive/components/assistant-message.ts";
 import { CustomEditor } from "../../src/modes/interactive/components/custom-editor.ts";
@@ -361,7 +362,7 @@ describe("Grok extension compatibility", () => {
 	});
 
 	it("keeps self-framed tool shells, result renderers and missing-tool behavior", async () => {
-		const harness = await createHarness({ extensionFactories: [grokUi] });
+		const harness = await createHarness({ extensionFactories: [grokUi, toolDisplay] });
 		harnesses.push(harness);
 		const resolve = (name: string) =>
 			harness.session.extensionRunner.resolveToolRenderers(name, () => harness.session.getToolDefinition(name));
@@ -371,7 +372,7 @@ describe("Grok extension compatibility", () => {
 	});
 
 	it("shows queued, running, success and failure while retaining original results", async () => {
-		const harness = await createHarness({ extensionFactories: [grokUi] });
+		const harness = await createHarness({ extensionFactories: [grokUi, toolDisplay] });
 		harnesses.push(harness);
 		const original = harness.session.getToolDefinition("read");
 		const renderer = harness.session.extensionRunner.resolveToolRenderers("read", () => original);
@@ -398,7 +399,7 @@ describe("Grok extension compatibility", () => {
 	});
 
 	it("unwraps the previous component before calling another extension's renderer", async () => {
-		const harness = await createHarness({ extensionFactories: [grokUi] });
+		const harness = await createHarness({ extensionFactories: [grokUi, toolDisplay] });
 		harnesses.push(harness);
 		const content = new Text("custom call", 0, 0);
 		const renderCall = vi.fn<NonNullable<ToolRenderers["renderCall"]>>(() => content);
@@ -426,7 +427,7 @@ describe("Grok extension compatibility", () => {
 	});
 
 	it("preserves both renderer slots and their shared state across result updates", async () => {
-		const harness = await createHarness({ extensionFactories: [grokUi] });
+		const harness = await createHarness({ extensionFactories: [grokUi, toolDisplay] });
 		harnesses.push(harness);
 		const call = new Text("custom call", 0, 0);
 		const result = new Text("custom result", 0, 0);
@@ -461,7 +462,7 @@ describe("Grok extension compatibility", () => {
 	});
 
 	it("drops stale partial output when the final result renderer fails", async () => {
-		const harness = await createHarness({ extensionFactories: [grokUi] });
+		const harness = await createHarness({ extensionFactories: [grokUi, toolDisplay] });
 		harnesses.push(harness);
 		const renderer = harness.session.extensionRunner.resolveToolRenderers("custom", () => ({
 			renderCall: () => new Text("custom call", 0, 0),
@@ -489,7 +490,7 @@ describe("Grok extension compatibility", () => {
 	});
 
 	it("falls back safely when expanded call and result components throw while rendering a hover", async () => {
-		const harness = await createHarness({ extensionFactories: [grokUi] });
+		const harness = await createHarness({ extensionFactories: [grokUi, toolDisplay] });
 		harnesses.push(harness);
 		const tui = new TuiAltScreen(new VirtualTerminal());
 		vi.spyOn(tui, "transcriptViewportHeight", "get").mockReturnValue(20);
@@ -537,7 +538,7 @@ describe("Grok extension compatibility", () => {
 	});
 
 	it("keeps asynchronous edit previews and the final result diff", async () => {
-		const harness = await createHarness({ extensionFactories: [grokUi] });
+		const harness = await createHarness({ extensionFactories: [grokUi, toolDisplay] });
 		harnesses.push(harness);
 		const file = join(harness.tempDir, "preview.txt");
 		writeFileSync(file, "before\n");
@@ -567,7 +568,7 @@ describe("Grok extension compatibility", () => {
 	});
 
 	it("retains native images and fallback output when a custom call renderer fails", async () => {
-		const harness = await createHarness({ extensionFactories: [grokUi] });
+		const harness = await createHarness({ extensionFactories: [grokUi, toolDisplay] });
 		harnesses.push(harness);
 		const capabilities = getCapabilities();
 		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
@@ -614,7 +615,7 @@ describe("Grok popup", () => {
 		const menu = new GrokMenu(
 			() => theme,
 			new KeybindingsManager(),
-			false,
+			"summary",
 			() => {},
 		);
 		expect(menu.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
@@ -624,16 +625,23 @@ describe("Grok popup", () => {
 		const keybindings = new KeybindingsManager({ "tui.select.confirm": "ctrl+y", "tui.select.cancel": "ctrl+q" });
 		setKeybindings(keybindings);
 		const done = vi.fn();
-		const menu = new GrokMenu(() => theme, keybindings, false, done);
+		const menu = new GrokMenu(() => theme, keybindings, "summary", done);
 		menu.handleInput?.("\x19");
-		expect(done).toHaveBeenLastCalledWith(true);
+		expect(done).toHaveBeenLastCalledWith("summary");
 		menu.handleInput?.("\x11");
-		expect(done).toHaveBeenLastCalledWith(false);
+		expect(done).toHaveBeenLastCalledWith(undefined);
+	});
+
+	it.each(["collapsed", "summary", "expanded"] as const)("selects the current %s mode by default", (mode) => {
+		const done = vi.fn();
+		const menu = new GrokMenu(() => theme, new KeybindingsManager(), mode, done);
+		menu.handleInput("\r");
+		expect(done).toHaveBeenCalledWith(mode);
 	});
 
 	it("selects a popup option by mouse inside its border", () => {
 		const done = vi.fn();
-		const menu = new GrokMenu(() => theme, new KeybindingsManager(), false, done);
+		const menu = new GrokMenu(() => theme, new KeybindingsManager(), "summary", done);
 		const height = menu.render(50).length;
 		menu.handleMouse({
 			type: "click",
@@ -648,7 +656,7 @@ describe("Grok popup", () => {
 			alt: false,
 			ctrl: false,
 		});
-		expect(done).toHaveBeenCalledWith(true);
+		expect(done).toHaveBeenCalledWith("collapsed");
 	});
 
 	it("returns fullscreen keyboard focus to the existing draft after closing", async () => {
@@ -667,7 +675,7 @@ describe("Grok popup", () => {
 				new GrokMenu(
 					() => theme,
 					new KeybindingsManager(),
-					false,
+					"summary",
 					() => tui.hideOverlay(),
 				),
 				{ width: 50, anchor: "center" },
@@ -693,7 +701,7 @@ describe("Grok popup", () => {
 
 describe("Grok timeline and compact tool previews", () => {
 	it("preserves an explicit compact opt-out and output-only custom renderers", async () => {
-		const harness = await createHarness({ extensionFactories: [grokUi] });
+		const harness = await createHarness({ extensionFactories: [grokUi, toolDisplay] });
 		harnesses.push(harness);
 		const tui = new TuiAltScreen(new VirtualTerminal());
 		for (const content of [
@@ -785,7 +793,7 @@ describe("Grok timeline and compact tool previews", () => {
 		args: Record<string, unknown>,
 		result: Parameters<ToolExecutionComponent["updateResult"]>[0],
 	) {
-		const harness = await createHarness({ extensionFactories: [grokUi] });
+		const harness = await createHarness({ extensionFactories: [grokUi, toolDisplay] });
 		harnesses.push(harness);
 		harness.sessionManager.appendMessage({ role: "user", content: "first question", timestamp: 1700000000000 });
 		harness.sessionManager.appendMessage({ role: "user", content: "second question", timestamp: 1700000001000 });

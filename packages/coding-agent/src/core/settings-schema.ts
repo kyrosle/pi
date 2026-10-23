@@ -250,6 +250,12 @@ export const SettingsSchema = Type.Object(
 				default: SETTINGS_DEFAULTS.thinkingViewMode,
 			}),
 		),
+		toolViewMode: Type.Optional(
+			Type.Union([Type.Literal("collapsed"), Type.Literal("summary"), Type.Literal("expanded")], {
+				description: "Tool display: compact title, call summary, or full output. Cycled with Ctrl+O.",
+				default: SETTINGS_DEFAULTS.toolViewMode,
+			}),
+		),
 		showCacheMissNotices: Type.Optional(
 			Type.Boolean({
 				description: "Show cache cost and provider recovery notices.",

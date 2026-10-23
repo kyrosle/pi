@@ -171,6 +171,9 @@ export type {
 	SourceInfo,
 	TerminalInputHandler,
 	ThinkingLevelSelectEvent,
+	ThinkingRenderComponent,
+	ThinkingRenderContext,
+	ThinkingRenderer,
 	ToolAnnotations,
 	ToolCallEvent,
 	ToolCallEventResult,
@@ -335,6 +338,7 @@ export {
 	type SkillFrontmatter,
 } from "./core/skills.ts";
 export { createSyntheticSourceInfo } from "./core/source-info.ts";
+export { isToolViewMode, TOOL_VIEW_MODES, type ToolViewMode } from "./core/tool-view.ts";
 export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.ts";
 // Tools
 export {

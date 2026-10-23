@@ -1,11 +1,4 @@
 import {
-	keyHint,
-	PreviewPanel,
-	type Theme,
-	type ToolRenderContext,
-	type ToolRenderers,
-} from "@earendil-works/pi-coding-agent";
-import {
 	Box,
 	type Component,
 	Container,
@@ -19,11 +12,17 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import type { ToolRenderContext, ToolRenderers } from "../../core/extensions/types.ts";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
+import { PreviewPanel } from "../../modes/interactive/components/preview-panel.ts";
+import type { Theme } from "../../modes/interactive/theme/theme.ts";
 
 type RenderContext = ToolRenderContext<Record<string, unknown>, unknown>;
 type ToolResult = Parameters<NonNullable<ToolRenderers["renderResult"]>>[0];
+type CompactToolCall = Component & { compactToolCall?: Component | false };
+type CompactToolComponent = Component & { compactToolResult?: Component };
 
-class GrokToolTitle implements Component {
+class ToolTitle implements Component {
 	private content: Component;
 	private theme: Theme;
 	private context: RenderContext;
@@ -37,16 +36,43 @@ class GrokToolTitle implements Component {
 		this.context = context;
 	}
 
+	private status(): string {
+		const { isError, isPartial, executionStarted } = this.context;
+		const label = isError ? "Failed" : isPartial ? (executionStarted ? "Running" : "Queued") : "Done";
+		return this.theme.fg(isError ? "error" : isPartial ? "muted" : "success", label);
+	}
+
+	renderSummary(width: number): string[] {
+		const status = this.status();
+		const prefix = this.theme.fg("muted", "▸ ");
+		// Reserve the longest status so completion does not change the visible excerpt.
+		const contentWidth = width - visibleWidth(prefix) - "Running".length - 1;
+		if (contentWidth < 4) {
+			const padding = width > 2 ? "  " : "";
+			const available = Math.max(1, width - padding.length);
+			const lines =
+				this.content instanceof Text ? this.content.renderTruncated(available) : this.content.render(available);
+			return [truncateToWidth(status, width), ...lines.map((line) => padding + truncateToWidth(line, available))];
+		}
+		const lines = (
+			this.content instanceof Text ? this.content.renderTruncated(contentWidth) : this.content.render(contentWidth)
+		).map((line) => truncateToWidth(line, contentWidth));
+		const header = lines.findIndex((line) => stripTerminalSequences(line).trim().length > 0);
+		return lines.map((line, index) =>
+			index === header
+				? prefix + line + " ".repeat(Math.max(0, width - visibleWidth(prefix + line + status))) + status
+				: `  ${line}`,
+		);
+	}
+
 	render(width: number): string[] {
 		const lines = this.content.render(width);
 		this.headerRow = lines.findIndex((line) => stripTerminalSequences(line).trim().length > 0);
 		if (this.headerRow < 0) return lines;
-		const { isError, isPartial, executionStarted, expanded } = this.context;
-		const label = isError ? "Failed" : isPartial ? (executionStarted ? "Running" : "Queued") : "Done";
-		const status = this.theme.fg(isError ? "error" : isPartial ? "muted" : "success", label);
-		const prefix = this.theme.fg("muted", expanded ? "▾ " : "▸ ");
+		const status = this.status();
+		const prefix = this.theme.fg("muted", this.context.expanded ? "▾ " : "▸ ");
 		const remaining = width - visibleWidth(prefix) - visibleWidth(status) - 1;
-		this.hasStatusRow = remaining < 4;
+		this.hasStatusRow = remaining < 4 || (this.context.expanded && visibleWidth(lines[this.headerRow]) > remaining);
 		this.headerWidth = Math.max(0, remaining);
 		if (this.hasStatusRow) return [truncateToWidth(status, width), ...lines];
 		const title = truncateToWidth(lines[this.headerRow], remaining);
@@ -74,7 +100,7 @@ class GrokToolTitle implements Component {
 	}
 }
 
-class GrokToolRow implements Component {
+class ToolRow implements Component {
 	call?: Component;
 	resultComponent?: Component;
 	context: RenderContext;
@@ -88,6 +114,11 @@ class GrokToolRow implements Component {
 		this.renderers = renderers;
 		this.theme = theme;
 		this.context = context;
+	}
+
+	get compactToolCall(): Component | false | undefined {
+		const call = this.call as CompactToolCall | undefined;
+		return call?.compactToolCall ?? call;
 	}
 
 	updateCall(args: unknown, theme: Theme, context: RenderContext): void {
@@ -160,7 +191,8 @@ class GrokToolRow implements Component {
 		this.compactVisible = false;
 		const context = this.context;
 		const call = this.call;
-		const title = call && new GrokToolTitle(call, this.theme, context);
+		const title = call && new ToolTitle(call, this.theme, context);
+		const compactCall = this.compactToolCall;
 		const hasNativeImages =
 			context.showImages &&
 			getCapabilities().images &&
@@ -173,14 +205,25 @@ class GrokToolRow implements Component {
 			isViewportTUI(context.tui) &&
 			!context.expanded &&
 			!hasNativeImages &&
-			!("compactToolCall" in call && call.compactToolCall === false)
+			compactCall
 		) {
-			const header = title
-				.render(Math.max(1, width - padding * 2))
-				.find((line) => stripTerminalSequences(line).trim().length > 0);
-			if (header !== undefined) {
+			const compactTitle = new ToolTitle(compactCall, this.theme, context);
+			const innerWidth = Math.max(1, width - padding * 2);
+			const collapsed = context.toolViewMode === "collapsed";
+			let callLines: string[];
+			if (collapsed) {
+				const header = compactTitle
+					.render(innerWidth)
+					.find((line) => stripTerminalSequences(line).trim().length > 0);
+				callLines = header === undefined ? [] : [header];
+			} else {
+				callLines = compactTitle.renderSummary(innerWidth);
+			}
+			if (callLines.length > 0) {
 				this.compactVisible = true;
-				return [this.background(truncateToWidth(" ".repeat(padding) + header, width, "", true))];
+				const result = this.resultComponent as CompactToolComponent | undefined;
+				const lines = [...callLines, ...(collapsed ? [] : (result?.compactToolResult?.render(innerWidth) ?? []))];
+				return lines.map((line) => this.background(truncateToWidth(" ".repeat(padding) + line, width, "", true)));
 			}
 		}
 		const body =
@@ -201,16 +244,34 @@ class GrokToolRow implements Component {
 	}
 
 	private renderPreview(width: number): string[] {
-		const context = { ...this.context, expanded: true, lastComponent: undefined };
+		const context: RenderContext = {
+			...this.context,
+			expanded: true,
+			toolViewMode: "expanded",
+			lastComponent: undefined,
+			// Nested wrappers key their inline rows by state identity.
+			state: { ...this.context.state },
+		};
+		let call: Component | undefined;
+		try {
+			call = this.renderers.renderCall?.(context.args, this.theme, context);
+		} catch {
+			call = new Text(this.theme.fg("muted", "Tool call preview unavailable"), 0, 0);
+		}
+		let result: Component | undefined;
+		try {
+			result = this.renderResult(context);
+		} catch {
+			result = this.fallbackResult(true);
+		}
 		const lines: string[] = [];
 		try {
-			const call = this.renderers.renderCall?.(context.args, this.theme, context);
-			if (call) lines.push(...new GrokToolTitle(call, this.theme, context).render(width));
+			if (call) lines.push(...new ToolTitle(call, this.theme, context).render(width));
 		} catch {
 			lines.push(...new Text(this.theme.fg("muted", "Tool call preview unavailable"), 0, 0).render(width));
 		}
 		try {
-			lines.push(...(this.renderResult(context)?.render(width) ?? []));
+			lines.push(...(result?.render(width) ?? []));
 		} catch {
 			lines.push(...(this.fallbackResult(true)?.render(width) ?? []));
 		}
@@ -250,21 +311,30 @@ class GrokToolRow implements Component {
 	}
 }
 
-export function grokToolRenderers(renderers: ToolRenderers): ToolRenderers {
+export function toolDisplayRenderers(renderers: ToolRenderers): ToolRenderers {
 	if (!renderers.renderCall) return renderers;
-	const rows = new WeakMap<object, GrokToolRow>();
+	const rows = new WeakMap<object, ToolRow>();
 	return {
 		renderShell: "self",
 		renderCall(args, theme, context) {
-			const row = rows.get(context.state) ?? new GrokToolRow(renderers, theme, context);
+			if (!context.tui) return renderers.renderCall!(args, theme, context);
+			const row = rows.get(context.state) ?? new ToolRow(renderers, theme, context);
 			rows.set(context.state, row);
 			row.updateCall(args, theme, context);
 			return row;
 		},
-		renderResult(result, _options, theme, context) {
+		renderResult(result, options, theme, context) {
+			if (!context.tui) {
+				if (renderers.renderResult) return renderers.renderResult(result, options, theme, context);
+				const row = new ToolRow(renderers, theme, context);
+				row.updateResult(result, theme, context);
+				return row.resultComponent ?? new Container();
+			}
 			const row = rows.get(context.state);
 			row?.updateResult(result, theme, context);
-			return (!row?.call && row?.resultComponent) || new Container();
+			if (!row?.call && row?.resultComponent) return row.resultComponent;
+			const component = row?.resultComponent as CompactToolComponent | undefined;
+			return Object.assign(new Container(), { compactToolResult: component?.compactToolResult });
 		},
 	};
 }

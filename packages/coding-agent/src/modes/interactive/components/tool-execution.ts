@@ -11,6 +11,7 @@ import {
 	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext, ToolRenderers } from "../../../core/extensions/types.ts";
+import type { ToolViewMode } from "../../../core/tool-view.ts";
 
 /** What this component needs from a tool: how to draw it, without executing it. */
 export type { ToolRenderers };
@@ -44,7 +45,8 @@ export class ToolExecutionComponent extends Container {
 	private toolName: string;
 	private toolCallId: string;
 	private args: any;
-	private expanded = false;
+	private baseToolViewMode: ToolViewMode = "summary";
+	private toolViewMode: ToolViewMode = "summary";
 	private showImages: boolean;
 	private imageWidthCells: number;
 	private outputPad: number;
@@ -117,6 +119,10 @@ export class ToolExecutionComponent extends Container {
 		return this.toolDefinition?.renderShell ?? "default";
 	}
 
+	private get expanded(): boolean {
+		return this.toolViewMode === "expanded";
+	}
+
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
 		return {
 			tui: this.ui,
@@ -137,6 +143,7 @@ export class ToolExecutionComponent extends Container {
 			argsComplete: this.argsComplete,
 			isPartial: this.isPartial,
 			expanded: this.expanded,
+			toolViewMode: this.toolViewMode,
 			showImages: this.showImages,
 			isError: this.result?.isError ?? false,
 			durationMs: this.isPartial ? undefined : this.result?.durationMs,
@@ -205,7 +212,17 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	setExpanded(expanded: boolean): void {
-		this.expanded = expanded;
+		this.toolViewMode = expanded
+			? "expanded"
+			: this.baseToolViewMode === "expanded"
+				? "summary"
+				: this.baseToolViewMode;
+		this.updateDisplay();
+	}
+
+	setToolViewMode(mode: ToolViewMode): void {
+		this.baseToolViewMode = mode;
+		this.toolViewMode = mode;
 		this.updateDisplay();
 	}
 

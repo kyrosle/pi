@@ -2,67 +2,30 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	Container,
 	type DefaultTextStyle,
-	isViewportTUI,
 	Markdown,
 	type MarkdownTheme,
 	MouseRegion,
 	Spacer,
 	Text,
 	type TUI,
-	truncateToWidth,
-	visibleWidth,
-	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { MarkdownTransformContext, MarkdownTransformer } from "../../../core/extensions/types.ts";
+import type {
+	MarkdownTransformContext,
+	MarkdownTransformer,
+	ThinkingRenderComponent,
+	ThinkingRenderer,
+} from "../../../core/extensions/types.ts";
 import type { ThinkingViewMode } from "../../../core/thinking-view.ts";
-import { getMarkdownTheme, type ThemeColor, theme } from "../theme/theme.ts";
+import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
-import { PreviewPanel } from "./preview-panel.ts";
-import { type ThinkingRole, type ThinkingStep, ThinkingSummary } from "./thinking-summary.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 
-const THINKING_ROLES: Record<ThinkingRole, { icon: string; color: ThemeColor }> = {
-	inspect: { icon: "◫", color: "mdLink" },
-	search: { icon: "⌕", color: "mdLink" },
-	plan: { icon: "◇", color: "accent" },
-	write: { icon: "✎", color: "accent" },
-	run: { icon: "▷", color: "accent" },
-	compare: { icon: "↔", color: "warning" },
-	verify: { icon: "✓", color: "success" },
-	failure: { icon: "!", color: "error" },
-	decision: { icon: "◆", color: "accent" },
-	reasoning: { icon: "·", color: "muted" },
-};
-
-function thinkingHeader(
-	step: ThinkingStep,
-	width: number,
-	prefix: string,
-	continuation: string,
-	active: boolean,
-): string[] {
-	const { icon, color } = THINKING_ROLES[step.role];
-	let lead = `${prefix}${theme.fg(color, icon)} `;
-	let follow = `${continuation}  `;
-	// At very narrow widths, keep the text readable instead of spending every cell on decoration.
-	if (width - visibleWidth(lead) < 8) lead = follow = "";
-	const text = active
-		? theme.style(step.summary, { fg: "thinkingText", bold: true })
-		: theme.fg("thinkingText", step.summary);
-	const available = width - visibleWidth(lead);
-	if (visibleWidth(step.summary) <= available) return [lead + text];
-	return wrapTextWithAnsi(text, Math.max(1, available)).map((line, index) =>
-		truncateToWidth(`${index === 0 ? lead : follow}${line}`, width),
-	);
-}
-
 /** A Markdown component kept for one content position, with the settings its transform captured. */
 interface MarkdownRecord {
 	config: string;
-	text: string;
 	markdown: Markdown;
 }
 
@@ -82,12 +45,13 @@ export class AssistantMessageComponent extends Container {
 	private messageId?: string;
 	private timestamp?: string;
 	private tui?: TUI;
-	private previewMarkdown?: Markdown;
+	private thinkingRenderer?: ThinkingRenderer;
 	private thinkingVisibilityOverrides = new Map<number, ThinkingViewMode>();
 	// Keyed by content position, so a streamed update reuses the Markdown (and its block cache) instead of rebuilding it.
 	private markdownRecords = new Map<string, MarkdownRecord>();
-	private thinkingSummaries = new Map<number, ThinkingSummary>();
+	private thinkingComponents = new Map<number, ThinkingRenderComponent>();
 	private cachedRender?: { width: number; lines: string[] };
+	private disposed = false;
 
 	constructor(
 		message?: AssistantMessage,
@@ -99,6 +63,7 @@ export class AssistantMessageComponent extends Container {
 		tui?: TUI,
 		messageId?: string,
 		timestamp?: string,
+		thinkingRenderer?: ThinkingRenderer,
 	) {
 		super();
 
@@ -111,6 +76,7 @@ export class AssistantMessageComponent extends Container {
 		this.messageId = messageId;
 		this.timestamp = timestamp;
 		this.tui = tui;
+		this.thinkingRenderer = thinkingRenderer;
 
 		// Container for text/thinking content
 		this.contentContainer = new Container();
@@ -122,6 +88,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override invalidate(): void {
+		if (this.disposed) return;
 		this.cachedRender = undefined;
 		super.invalidate();
 		// Theme and highlighter state may have changed, so rebuild every Markdown instead of reusing it.
@@ -131,12 +98,23 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	dispose(): void {
+		if (this.disposed) return;
+		this.disposed = true;
+		for (const component of this.thinkingComponents.values()) this.disposeThinkingComponent(component);
+		this.thinkingComponents.clear();
+		this.markdownRecords.clear();
+		this.thinkingVisibilityOverrides.clear();
+		this.contentContainer.clear();
+		this.cachedRender = undefined;
+		this.lastMessage = undefined;
+	}
+
 	setHideThinkingBlock(hide: boolean): void {
 		this.setThinkingViewMode(hide ? "collapsed" : "expanded");
 	}
 
 	setThinkingViewMode(mode: ThinkingViewMode): void {
-		this.dismissThinkingPreview();
 		this.thinkingViewMode = mode;
 		this.thinkingVisibilityOverrides.clear();
 		if (this.lastMessage) {
@@ -171,6 +149,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	updateContent(message: AssistantMessage, isStreaming = this.isStreaming): void {
+		if (this.disposed) return;
 		this.cachedRender = undefined;
 		this.lastMessage = message;
 		this.isStreaming = isStreaming;
@@ -179,8 +158,8 @@ export class AssistantMessageComponent extends Container {
 		this.contentContainer.clear();
 		const previousRecords = this.markdownRecords;
 		this.markdownRecords = new Map();
-		const previousSummaries = this.thinkingSummaries;
-		this.thinkingSummaries = new Map();
+		const previousThinkingComponents = this.thinkingComponents;
+		this.thinkingComponents = new Map();
 
 		const hasVisibleContent = message.content.some(
 			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
@@ -228,14 +207,6 @@ export class AssistantMessageComponent extends Container {
 				const runIndex = thinkingRunIndex++;
 				const mode = this.thinkingVisibilityOverrides.get(runIndex) ?? this.thinkingViewMode;
 				const thinking = thinkingBlocks.join("\n\n");
-				const previousThinking = previousRecords.get(`thinking:${runStart}`)?.text;
-				if (
-					previousThinking !== undefined &&
-					previousRecords.get(`thinking:${runStart}`)?.markdown === this.previewMarkdown &&
-					!thinking.startsWith(previousThinking)
-				) {
-					this.dismissThinkingPreview();
-				}
 				// Keep the component and block cache while collapsed, but render Markdown only on demand.
 				const markdown = this.acquireMarkdown(
 					previousRecords,
@@ -245,111 +216,60 @@ export class AssistantMessageComponent extends Container {
 					message.model,
 					{ color: (text: string) => theme.fg("thinkingText", text), italic: true },
 				);
-				const summary = previousSummaries.get(runStart) ?? new ThinkingSummary();
-				this.thinkingSummaries.set(runStart, summary);
-				const steps = mode === "expanded" ? [] : summary.update(thinking);
-				const activeStep = isStreaming && i === message.content.length - 1 ? steps.at(-1) : undefined;
-				const label = this.hiddenThinkingLabel === "Thinking..." ? "Thinking Steps" : this.hiddenThinkingLabel;
-				const thinkingComponent = {
-					render: (width: number): string[] => {
-						if (mode === "expanded") return markdown.render(width);
-						const pad = " ".repeat(this.outputPad);
-						if (mode === "collapsed") {
-							const step = steps.at(-1);
-							if (!step) return [];
-							const prefix = `${pad}▸ ${label} · `;
-							return thinkingHeader(
-								step,
-								width,
-								theme.fg(activeStep ? "accent" : "muted", prefix),
-								" ".repeat(visibleWidth(prefix)),
-								step === activeStep,
-							);
-						}
-						const lines = [
-							theme.fg(
-								"muted",
-								truncateToWidth(
-									`${pad}┆ ${label} · Summary · ${steps.length} ${steps.length === 1 ? "step" : "steps"}`,
-									width,
-								),
-							),
-						];
-						for (const [index, step] of steps.entries()) {
-							const last = index === steps.length - 1;
-							const active = step === activeStep;
-							const connector = theme.fg(active ? "accent" : "muted", last ? "└─" : "├─");
-							const continuation = theme.fg("muted", last ? "   " : "│  ");
-							lines.push(
-								...thinkingHeader(
-									{ ...step, summary: `Step ${index + 1} · ${step.summary}` },
-									width,
-									`${pad}${connector} `,
-									pad + continuation,
-									active,
-								),
-							);
-						}
-						return lines;
-					},
-					invalidate: () => {
-						markdown.invalidate();
-					},
-				};
-				const toggle = () => {
-					this.dismissThinkingPreview();
+				const setExpanded = (expanded: boolean) => {
+					if (this.disposed) return;
 					this.thinkingVisibilityOverrides.set(
 						runIndex,
-						mode === "expanded"
-							? this.thinkingViewMode === "expanded"
-								? "summary"
-								: this.thinkingViewMode
-							: "expanded",
+						expanded ? "expanded" : this.thinkingViewMode === "expanded" ? "summary" : this.thinkingViewMode,
 					);
 					if (this.lastMessage) this.updateContent(this.lastMessage);
 					this.tui?.requestRender();
 				};
-				this.contentContainer.addChild(
-					new MouseRegion(thinkingComponent, (event) => {
-						const tui = this.tui;
-						if (
-							mode !== "expanded" &&
-							event.type === "move" &&
-							event.button === "none" &&
-							tui &&
-							isViewportTUI(tui)
-						) {
-							this.previewMarkdown = markdown;
-							tui.showHoverPreview?.(
-								markdown,
-								new PreviewPanel(markdown, {
-									maxHeight: () =>
-										Math.min(tui.terminal.rows * 0.7, tui.transcriptViewportHeight ?? tui.terminal.rows),
-									border: (text) => theme.fg("borderMuted", text),
-									background: (text) => theme.bg("toolPendingBg", text),
-									hint: () => "Click to expand all",
-									onClick: toggle,
-								}),
-								event,
-							);
-							return { handled: true, render: false };
-						}
-						if (event.type !== "click" || event.button !== "left") return undefined;
-						toggle();
-						return { handled: true };
-					}),
-				);
+				let component: ThinkingRenderComponent | undefined;
+				try {
+					component = this.thinkingRenderer?.(thinking, theme, {
+						mode,
+						isStreaming,
+						active: isStreaming && i === message.content.length - 1,
+						hiddenLabel: this.hiddenThinkingLabel,
+						outputPad: this.outputPad,
+						markdown,
+						lastComponent: previousThinkingComponents.get(runStart),
+						tui: this.tui,
+						setExpanded,
+						invalidate: () => {
+							if (this.disposed) return;
+							this.cachedRender = undefined;
+							this.tui?.requestRender();
+						},
+					});
+				} catch {
+					// Keep the original thinking available if an extension cannot render it.
+				}
+				if (component) {
+					this.thinkingComponents.set(runStart, component);
+					this.contentContainer.addChild(component);
+				} else {
+					const fallback =
+						mode === "collapsed"
+							? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
+							: markdown;
+					this.contentContainer.addChild(
+						new MouseRegion(fallback, (event) => {
+							if (event.type !== "click" || event.button !== "left") return undefined;
+							setExpanded(mode !== "expanded");
+							return { handled: true };
+						}),
+					);
+				}
 				if (hasVisibleContentAfter) {
 					this.contentContainer.addChild(new Spacer(1));
 				}
 			}
 		}
 
-		if (
-			this.previewMarkdown &&
-			![...this.markdownRecords.values()].some((r) => r.markdown === this.previewMarkdown)
-		) {
-			this.dismissThinkingPreview();
+		for (const [position, component] of previousThinkingComponents) {
+			if (this.thinkingComponents.get(position) !== component) this.disposeThinkingComponent(component);
 		}
 
 		// Check if incomplete/failed - show after partial content.
@@ -378,10 +298,12 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	private dismissThinkingPreview(): void {
-		if (!this.previewMarkdown) return;
-		if (this.tui && isViewportTUI(this.tui)) this.tui.hideHoverPreview?.();
-		this.previewMarkdown = undefined;
+	private disposeThinkingComponent(component: ThinkingRenderComponent): void {
+		try {
+			component.dispose?.();
+		} catch {
+			// A failing extension must not prevent the other thinking components from being released.
+		}
 	}
 
 	private acquireMarkdown(
@@ -412,7 +334,7 @@ export class AssistantMessageComponent extends Container {
 					)(source, width),
 			});
 		}
-		this.markdownRecords.set(key, { config, text, markdown });
+		this.markdownRecords.set(key, { config, markdown });
 		return markdown;
 	}
 }

@@ -5,6 +5,7 @@ import { defaultEditorTheme } from "../../../tui/test/test-themes.ts";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal.ts";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
 import type { ThinkingViewMode } from "../../src/core/thinking-view.ts";
+import thinkingSteps from "../../src/extensions/thinking-steps/index.ts";
 import { AssistantMessageComponent } from "../../src/modes/interactive/components/assistant-message.ts";
 import { CustomEditor } from "../../src/modes/interactive/components/custom-editor.ts";
 import { InteractiveMode } from "../../src/modes/interactive/interactive-mode.ts";
@@ -12,9 +13,9 @@ import { initTheme } from "../../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
 import { createHarness } from "./harness.ts";
 
-test("native thinking controls change the view without changing model history or calling a provider", async () => {
+test("thinking extension follows native view controls without changing history or calling a provider", async () => {
 	initTheme("dark");
-	const harness = await createHarness();
+	const harness = await createHarness({ extensionFactories: [thinkingSteps] });
 	const ui = new TuiMainScreen(new VirtualTerminal());
 	const keybindings = new KeybindingsManager();
 	setKeybindings(keybindings);
@@ -56,7 +57,21 @@ test("native thinking controls change the view without changing model history or
 		await harness.session.prompt("fixture");
 		const message = harness.session.messages.find((message) => message.role === "assistant");
 		if (!message || message.role !== "assistant") throw new Error("Missing faux response");
-		chatContainer.addChild(new AssistantMessageComponent(message, "summary"));
+		expect(harness.session.extensionRunner?.getThinkingRenderer()).toBeTypeOf("function");
+		chatContainer.addChild(
+			new AssistantMessageComponent(
+				message,
+				"summary",
+				undefined,
+				"Thinking...",
+				1,
+				[],
+				undefined,
+				undefined,
+				undefined,
+				harness.session.extensionRunner?.getThinkingRenderer(),
+			),
+		);
 		const original = structuredClone(harness.session.messages);
 		const calls = harness.faux.state.callCount;
 		invoke("setupKeyHandlers");

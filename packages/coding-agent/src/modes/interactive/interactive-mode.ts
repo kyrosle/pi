@@ -118,6 +118,7 @@ import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import { isThinkingViewMode, THINKING_VIEW_MODES, type ThinkingViewMode } from "../../core/thinking-view.ts";
+import { TOOL_VIEW_MODES, type ToolViewMode } from "../../core/tool-view.ts";
 import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
@@ -231,6 +232,13 @@ function isEmbeddedStatus(editor: EditorComponent): editor is WorkingStatusEdito
 
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
+}
+
+function clearChat(container: Container): void {
+	for (const child of container.children) {
+		if (child instanceof AssistantMessageComponent) child.dispose();
+	}
+	container.clear();
 }
 
 class ExpandableText extends ThemedText implements Expandable {
@@ -511,7 +519,8 @@ export class InteractiveMode {
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 
-	// Tool output expansion state
+	// Tool display mode and expansion state for other collapsible components.
+	private toolViewMode: ToolViewMode = "summary";
 	private toolOutputExpanded = false;
 
 	// Thinking block visibility state
@@ -663,7 +672,9 @@ export class InteractiveMode {
 		this.footerContainer = new Container();
 		this.footerContainer.addChild(this.footer);
 
-		// Load the thinking display mode.
+		// Load the tool and thinking display modes.
+		this.toolViewMode = this.settingsManager.getToolViewMode();
+		this.toolOutputExpanded = this.toolViewMode === "expanded";
 		this.thinkingViewMode = this.settingsManager.getThinkingViewMode();
 		this.outputPad = this.settingsManager.getOutputPad();
 
@@ -1051,7 +1062,7 @@ export class InteractiveMode {
 						"to cycle models",
 					),
 					hint("app.model.select", "to select model"),
-					hint("app.tools.expand", "to expand tools"),
+					hint("app.tools.expand", "to cycle tool view"),
 					hint("app.thinking.toggle", "to expand thinking"),
 					hint("app.editor.external", "for external editor"),
 					rawKeyHint("/", "for commands"),
@@ -1068,12 +1079,12 @@ export class InteractiveMode {
 					rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
 					rawKeyHint("/", "commands"),
 					rawKeyHint("!", "bash"),
-					hint("app.tools.expand", "more"),
+					hint("app.tools.expand", "tool view"),
 				].join(theme.fg("muted", " · "));
 			const compactOnboarding = () =>
 				theme.fg(
 					"dim",
-					`Press ${keyText("app.tools.expand")} to show full startup help${showDetails ? " and loaded resources" : ""}.`,
+					`Press ${keyText("app.tools.expand")} to cycle tool views; expanded shows full startup help${showDetails ? " and loaded resources" : ""}.`,
 				);
 			const onboarding = () =>
 				theme.fg("dim", `Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`);
@@ -2025,7 +2036,7 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
-					this.chatContainer.clear();
+					clearChat(this.chatContainer);
 					this.renderInitialMessages();
 					if (result.editorText && !this.editor.getText().trim()) {
 						this.editor.setText(result.editorText);
@@ -2085,6 +2096,8 @@ export class InteractiveMode {
 		this.footer.setSession(this.session);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
+		this.toolViewMode = this.settingsManager.getToolViewMode();
+		this.toolOutputExpanded = this.toolViewMode === "expanded";
 		this.thinkingViewMode = this.settingsManager.getThinkingViewMode();
 		this.outputPad = this.settingsManager.getOutputPad();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
@@ -2225,7 +2238,7 @@ export class InteractiveMode {
 
 	private renderCurrentSessionState(): void {
 		this.loadedResourcesContainer.clear();
-		this.chatContainer.clear();
+		clearChat(this.chatContainer);
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
@@ -2695,6 +2708,8 @@ export class InteractiveMode {
 			},
 			getToolsExpanded: () => this.toolOutputExpanded,
 			setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
+			getToolViewMode: () => this.toolViewMode,
+			setToolViewMode: (mode) => this.setToolViewMode(mode),
 		};
 	}
 
@@ -3449,7 +3464,7 @@ export class InteractiveMode {
 				} else if (event.entry.type === "compaction") {
 					const entries = this.sessionManager.buildContextEntries();
 					if (entries[0]?.id !== event.entry.id) break;
-					this.chatContainer.clear();
+					clearChat(this.chatContainer);
 					const branch = this.sessionManager.getBranch();
 					const compactionIndex = branch.findIndex((entry) => entry.id === event.entry.id);
 					const entriesAfterCompaction = new Set(branch.slice(compactionIndex + 1).map((entry) => entry.id));
@@ -3500,6 +3515,9 @@ export class InteractiveMode {
 						this.outputPad,
 						this.getMarkdownTransformers(),
 						this.ui,
+						undefined,
+						undefined,
+						this.session.extensionRunner.getThinkingRenderer(),
 					);
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
@@ -3529,7 +3547,7 @@ export class InteractiveMode {
 									this.ui,
 									this.sessionManager.getCwd(),
 								);
-								component.setExpanded(this.toolOutputExpanded);
+								component.setToolViewMode(this.toolViewMode);
 								this.chatContainer.addChild(component);
 								this.pendingTools.set(content.id, component);
 							} else {
@@ -3608,7 +3626,7 @@ export class InteractiveMode {
 						this.ui,
 						this.sessionManager.getCwd(),
 					);
-					component.setExpanded(this.toolOutputExpanded);
+					component.setToolViewMode(this.toolViewMode);
 					this.chatContainer.addChild(component);
 					this.pendingTools.set(event.toolCallId, component);
 				}
@@ -3643,6 +3661,7 @@ export class InteractiveMode {
 				}
 				this.clearStatusIndicator("working");
 				if (this.streamingComponent) {
+					this.streamingComponent.dispose();
 					this.chatContainer.removeChild(this.streamingComponent);
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
@@ -3696,7 +3715,7 @@ export class InteractiveMode {
 					if (entries[0]?.type !== "compaction") {
 						throw new Error("Completed compaction is missing from the session context");
 					}
-					this.chatContainer.clear();
+					clearChat(this.chatContainer);
 					// The latest compaction is prepended for model context; append it below at its chronological position.
 					this.renderSessionEntries(entries.slice(1));
 					this.addMessageToChat(
@@ -3983,6 +4002,7 @@ export class InteractiveMode {
 					this.ui,
 					options?.messageId,
 					options?.timestamp,
+					this.session.extensionRunner.getThinkingRenderer(),
 				);
 				this.chatContainer.addChild(assistantComponent);
 				break;
@@ -4053,7 +4073,7 @@ export class InteractiveMode {
 							this.ui,
 							this.sessionManager.getCwd(),
 						);
-						component.setExpanded(this.toolOutputExpanded);
+						component.setToolViewMode(this.toolViewMode);
 						this.chatContainer.addChild(component);
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
@@ -4281,7 +4301,7 @@ export class InteractiveMode {
 	}
 
 	private rebuildChatFromMessages(): void {
-		this.chatContainer.clear();
+		clearChat(this.chatContainer);
 		this.renderSessionEntries(this.sessionManager.buildContextEntries());
 	}
 
@@ -4578,12 +4598,17 @@ export class InteractiveMode {
 	}
 
 	private toggleToolOutputExpansion(): void {
-		this.setToolsExpanded(!this.toolOutputExpanded);
+		this.setToolViewMode(TOOL_VIEW_MODES[(TOOL_VIEW_MODES.indexOf(this.toolViewMode) + 1) % TOOL_VIEW_MODES.length]);
 	}
 
 	private setToolsExpanded(expanded: boolean): void {
-		if (expanded === this.toolOutputExpanded) return;
+		this.setToolViewMode(expanded ? "expanded" : "summary");
+	}
 
+	private setToolViewMode(mode: ToolViewMode): void {
+		this.toolViewMode = mode;
+		this.settingsManager.setToolViewMode(mode);
+		const expanded = mode === "expanded";
 		this.toolOutputExpanded = expanded;
 		const activeHeader = this.customHeader ?? this.builtInHeader;
 		if (isExpandable(activeHeader)) {
@@ -4591,12 +4616,14 @@ export class InteractiveMode {
 		}
 		for (const container of [this.loadedResourcesContainer, this.chatContainer]) {
 			for (const child of container.children) {
-				if (isExpandable(child)) {
+				if (child instanceof ToolExecutionComponent) {
+					child.setToolViewMode(mode);
+				} else if (isExpandable(child)) {
 					child.setExpanded(expanded);
 				}
 			}
 		}
-		this.showStatus(`Tool output: ${expanded ? "expanded" : "collapsed"}`);
+		this.showStatus(`Tool view: ${mode}`);
 	}
 
 	/** Update rendered assistant messages without rebuilding live tool components. */
@@ -5690,7 +5717,7 @@ export class InteractiveMode {
 						}
 
 						// Update UI
-						this.chatContainer.clear();
+						clearChat(this.chatContainer);
 						this.renderInitialMessages();
 						if (result.editorText && !this.editor.getText().trim()) {
 							this.editor.setText(result.editorText);
@@ -6501,6 +6528,8 @@ export class InteractiveMode {
 			if (chatRestoredBeforeSessionStart) {
 				return;
 			}
+			this.toolViewMode = this.settingsManager.getToolViewMode();
+			this.toolOutputExpanded = this.toolViewMode === "expanded";
 			this.thinkingViewMode = this.settingsManager.getThinkingViewMode();
 			this.outputPad = this.settingsManager.getOutputPad();
 			this.rebuildChatFromMessages();
@@ -6915,7 +6944,7 @@ export class InteractiveMode {
 | \`${cycleThinkingLevel}\` | Cycle thinking level |
 | \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
 | \`${selectModel}\` | Open model selector |
-| \`${expandTools}\` | Toggle tool output expansion |
+| \`${expandTools}\` | Cycle tool view: collapsed, summary, expanded |
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${cycleThinkingView}\` | Cycle thinking view: collapsed, summary, expanded |
 | \`${externalEditor}\` | Edit message in external editor |
@@ -7133,6 +7162,9 @@ export class InteractiveMode {
 		if (this.isInitialized) {
 			this.stopInteractiveTui(fullscreenExitOutput);
 			this.isInitialized = false;
+		}
+		for (const child of this.chatContainer.children) {
+			if (child instanceof AssistantMessageComponent) child.dispose();
 		}
 		this.unregisterSignalHandlers();
 	}

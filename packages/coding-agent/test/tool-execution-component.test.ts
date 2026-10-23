@@ -458,6 +458,85 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("arg:bar");
 	});
 
+	test("defaults to summary and forwards all three tool modes to renderers", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderCall: (_args, _theme, context) => new Text(`call:${context.toolViewMode}:${context.expanded}`, 0, 0),
+			renderResult: (_result, options, _theme, context) =>
+				new Text(`result:${context.toolViewMode}:${context.expanded}:${options.expanded}`, 0, 0),
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-view-context",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [], isError: false });
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("result:summary:false:false");
+		for (const mode of ["collapsed", "summary", "expanded"] as const) {
+			component.setToolViewMode(mode);
+			const expanded = mode === "expanded";
+			const rendered = stripAnsi(component.render(120).join("\n"));
+			expect(rendered).toContain(`call:${mode}:${expanded}`);
+			expect(rendered).toContain(`result:${mode}:${expanded}:${expanded}`);
+		}
+	});
+
+	test.each(["collapsed", "summary", "expanded"] as const)(
+		"clicks toggle a tool locally from the %s base mode and global updates reset it",
+		(mode) => {
+			const toolDefinition: ToolDefinition = {
+				...createBaseToolDefinition(),
+				renderCall: (_args, _theme, context) => new Text(`mode:${context.toolViewMode}`, 0, 0),
+			};
+			const components = ["first", "second"].map((id) => {
+				const component = new ToolExecutionComponent(
+					"custom_tool",
+					id,
+					{},
+					{},
+					toolDefinition,
+					createFakeTui(),
+					process.cwd(),
+				);
+				component.setToolViewMode(mode);
+				component.updateResult({ content: [], isError: false });
+				return component;
+			});
+			const [first, second] = components;
+			const lines = first.render(120);
+			const y = lines.findIndex((line) => stripAnsi(line).includes(`mode:${mode}`));
+			const event: TuiMouseEvent = {
+				type: "click",
+				button: "left",
+				x: 2,
+				y,
+				screenX: 2,
+				screenY: y,
+				width: 120,
+				height: lines.length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				clickCount: 1,
+			};
+			expect(first.handleMouse(event)?.handled).toBe(true);
+			const firstClicked = mode === "expanded" ? "summary" : "expanded";
+			expect(stripAnsi(first.render(120).join("\n"))).toContain(`mode:${firstClicked}`);
+			first.updateResult({ content: [], isError: false }, true);
+			expect(stripAnsi(first.render(120).join("\n"))).toContain(`mode:${firstClicked}`);
+			expect(stripAnsi(second.render(120).join("\n"))).toContain(`mode:${mode}`);
+			expect(first.handleMouse(event)?.handled).toBe(true);
+			expect(stripAnsi(first.render(120).join("\n"))).toContain(`mode:${mode}`);
+			first.setExpanded(mode !== "expanded");
+			first.setToolViewMode(mode);
+			expect(stripAnsi(first.render(120).join("\n"))).toContain(`mode:${mode}`);
+		},
+	);
+
 	test("shows arguments in the fallback call header", () => {
 		const longValue = "x".repeat(200);
 		const component = new ToolExecutionComponent(

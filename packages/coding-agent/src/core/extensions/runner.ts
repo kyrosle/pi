@@ -85,6 +85,7 @@ import type {
 	SessionBeforeTreeResult,
 	SessionBoundaryDraft,
 	SessionShutdownEvent,
+	ThinkingRenderer,
 	ToolCallEvent,
 	ToolCallEventResult,
 	ToolRenderers,
@@ -364,6 +365,8 @@ const noOpUIContext: ExtensionUIContext = {
 	setTheme: (_theme: string | Theme) => ({ success: false, error: "UI not available" }),
 	getToolsExpanded: () => false,
 	setToolsExpanded: () => {},
+	getToolViewMode: () => "summary",
+	setToolViewMode: () => {},
 };
 
 export class ExtensionRunner {
@@ -796,6 +799,13 @@ export class ExtensionRunner {
 
 	getMarkdownTransformers(): MarkdownTransformer[] {
 		return this.extensions.flatMap((ext) => (ext.markdownTransformer ? [ext.markdownTransformer] : []));
+	}
+
+	getThinkingRenderer(): ThinkingRenderer | undefined {
+		for (const extension of this.extensions) {
+			if (extension.thinkingRenderer) return extension.thinkingRenderer;
+		}
+		return undefined;
 	}
 
 	/** Renderers of calls to `toolName`: extension resolvers in load order, then `base`. */

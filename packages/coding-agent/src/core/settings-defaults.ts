@@ -26,6 +26,7 @@ export const SETTINGS_DEFAULTS = {
 	},
 	hideThinkingBlock: false,
 	thinkingViewMode: "summary",
+	toolViewMode: "summary",
 	showCacheMissNotices: false,
 	quietStartup: false,
 	defaultProjectTrust: "ask",
