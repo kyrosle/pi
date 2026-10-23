@@ -547,7 +547,8 @@ export interface ViewportTUI extends TUI {
 	setMouseHoverEnabled?(enabled: boolean): void;
 	setHoverPreviewDelay?(delayMs: number): void;
 	showHoverPreview?(owner: object, component: Component, source: TuiMouseEvent): void;
-	hideHoverPreview?(): void;
+	/** Hide the current or pending preview, optionally only when its owner matches. */
+	hideHoverPreview?(owner?: object): void;
 }
 
 export function isViewportTUI(tui: TUI): tui is ViewportTUI {

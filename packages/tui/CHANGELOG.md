@@ -7,6 +7,8 @@
 - Added `replaceControlCharacters()` to replace runs of C0 and C1 control characters with a space
 - Added `Component.capturesViewportInput`. While a component that sets it has focus, `TuiAltScreen` sends viewport keys such as PageUp/PageDown to it instead of scrolling the transcript, as it already does for focused overlays. `SelectList`, `SettingsList`, and `Editor` with open autocomplete set it ([#7629](https://github.com/earendil-works/pi/issues/7629), based on [#7680](https://github.com/earendil-works/pi/pull/7680) by [@muyiyr](https://github.com/muyiyr))
 - Added `getSelectPageIndex()` to compute the selection after a `tui.select.pageUp` or `tui.select.pageDown` key ([#7629](https://github.com/earendil-works/pi/issues/7629), based on [#7680](https://github.com/earendil-works/pi/pull/7680) by [@muyiyr](https://github.com/muyiyr))
+- Added optional owner matching to `hideHoverPreview(owner)` so components can dismiss their own active or pending preview without closing another component's preview
+- Added cached `Text.renderTruncated()` to keep logical lines and truncate overflow with `...`, preserving ANSI styles and hyperlinks across newlines without changing normal text wrapping
 - Exported `isImageLine()` so composed Markdown views can preserve terminal image commands when indenting text
 - Added an optional `setHoverPreviewDelay()` hook with cancellation while waiting, so extensions can configure pointer-preview timing without duplicating viewport mouse handling
 - Added an opt-in fullscreen conversation timeline with pointer previews and turn navigation, and non-capturing hover previews; the Grok extension owns its scrollable preview component

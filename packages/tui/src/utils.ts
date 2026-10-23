@@ -929,6 +929,16 @@ export function wrapTextWithAnsi(text: string, width: number): string[] {
 	return result.length > 0 ? result : [""];
 }
 
+/** Truncate each logical line while carrying styles from the complete source across newlines. */
+export function truncateTextWithAnsi(text: string, width: number): string[] {
+	const tracker = new AnsiCodeTracker();
+	return text.split(/\r\n|\r|\n/).map((line) => {
+		const prefix = tracker.getActiveCodes();
+		updateTrackerFromText(line, tracker);
+		return truncateToWidth(prefix + line, width) + tracker.getLineEndReset();
+	});
+}
+
 function wrapSingleLine(line: string, width: number): string[] {
 	if (!line) {
 		return [""];
