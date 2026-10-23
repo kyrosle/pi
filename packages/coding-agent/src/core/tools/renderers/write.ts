@@ -21,6 +21,7 @@ type WriteHighlightCache = {
 };
 class WriteCallRenderComponent extends Text {
 	cache?: WriteHighlightCache;
+	compactToolCall = new Text("", 0, 0);
 
 	constructor() {
 		super("", 0, 0);
@@ -93,6 +94,9 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
 	}
 	return lines.slice(0, end);
 }
+function formatWriteTitle(rawPath: string | null, theme: Theme, cwd: string): string {
+	return `${theme.fg("toolTitle", theme.bold("write"))} ${renderToolPath(rawPath, theme, cwd)}`;
+}
 function formatWriteCall(
 	args: { path?: string; file_path?: string; content?: string } | undefined,
 	options: ToolRenderResultOptions,
@@ -102,8 +106,7 @@ function formatWriteCall(
 ): string {
 	const rawPath = str(args?.file_path ?? args?.path);
 	const fileContent = str(args?.content);
-	const pathDisplay = renderToolPath(rawPath, theme, cwd);
-	let text = `${theme.fg("toolTitle", theme.bold("write"))} ${pathDisplay}`;
+	let text = formatWriteTitle(rawPath, theme, cwd);
 
 	if (fileContent === null) {
 		text += `\n\n${theme.fg("error", "[invalid content arg - expected string]")}`;
@@ -149,6 +152,7 @@ export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rend
 		const fileContent = str(renderArgs?.content);
 		const component =
 			(context.lastComponent as WriteCallRenderComponent | undefined) ?? new WriteCallRenderComponent();
+		component.compactToolCall.setText(formatWriteTitle(rawPath, theme, context.cwd));
 		if (fileContent !== null) {
 			component.cache = context.argsComplete
 				? rebuildWriteHighlightCacheFull(rawPath, fileContent)

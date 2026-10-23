@@ -16,7 +16,7 @@ Add `"$schema": "https://pi.dev/schemas/settings.schema.json"` to `settings.json
 | `modelThinkingLevels` | object | None | Per-model startup thinking levels keyed by exact `provider/modelId`. |
 | `thinkingBudgets` | object | Built-in budgets | Token budgets for `minimal`, `low`, `medium`, and `high` thinking levels. |
 | `enabledModels` | `string[]` | All available models | Model patterns used for startup selection and model cycling. Uses the same format as `--models`. |
-| `thinkingViewMode` | `"collapsed" \| "summary" \| "expanded"` | `"summary"` | Native Thinking Steps display mode. Takes precedence over `hideThinkingBlock`. |
+| `thinkingViewMode` | `"collapsed" \| "summary" \| "expanded"` | `"summary"` | Thinking display mode passed to the active renderer. Takes precedence over `hideThinkingBlock`. |
 | `hideThinkingBlock` | boolean | `false` | When `thinkingViewMode` is unset, `true` selects collapsed mode. |
 | `showCacheMissNotices` | boolean | `false` | Show notices for significant cache misses, successful cache warming, compaction usage, and provider recovery. |
 | `cacheWarming` | `"off" \| "streaming" \| "idle"` | `"streaming"` | Keep eligible provider prompt caches warm during active runs or, with `"idle"`, between runs. Global setting only. |
@@ -25,7 +25,7 @@ Cache warming runs only when the model declares a cache lifetime and Pi estimate
 
 See [Choose a Model](models.md) for model selection and thinking controls.
 
-Thinking Steps groups source headings, list items, and paragraphs without making model calls. Summaries select salient source sentences within each step, including conclusions and explicit outcomes beyond the opening line. Icons and colors describe the text's subject; a green verification icon does not mean a test passed. The currently streaming step is emphasized until thinking ends or answer text begins.
+The CLI enables `builtin:thinking-steps` by default. This extension groups source headings, list items, and paragraphs without making model calls. Summaries select salient source sentences within each step, including conclusions and explicit outcomes beyond the opening line. Icons and colors describe the text's subject; a green verification icon does not mean a test passed. The currently streaming step is emphasized until thinking ends or answer text begins.
 
 - `collapsed`: a compact preview of the current step, wrapping when needed.
 - `summary`: a numbered summary for every step, in source order, with all step bodies folded.
@@ -38,6 +38,8 @@ Use `/thinking-steps collapsed|summary|expanded`, `/thinking-steps` for a picker
 Click anywhere in a Thinking Steps block to show the whole block's original thinking, exactly as in expanded mode. Clicking the original text returns that block to the selected compact view (summary when the global mode is expanded). Other thinking blocks keep their state. Global view changes reset these block overrides.
 
 In fullscreen mode, hover over collapsed or summary thinking for a scrollable preview of the whole block's original text. Clicking the preview expands the whole block. Previews retain the Grok hover delay. Markdown renders only when expanded or previewed, and completed code-block caches survive folding and streamed updates. Stored messages and model context are unchanged.
+
+Disable the extension with `"extensions": ["-builtin:thinking-steps"]` or `--no-extensions`. Without a thinking renderer, collapsed mode shows the hidden-thinking label and summary/expanded show the original Markdown. `-e builtin:thinking-steps` enables it explicitly when other extensions are disabled. Extensions can replace this presentation through [`registerThinkingRenderer()`](extensions.md#thinking-rendering); the first registered renderer in load order wins.
 
 ## Interaction
 
@@ -55,10 +57,23 @@ In fullscreen mode, hover over collapsed or summary thinking for a scrollable pr
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `defaultTools` | `string[]` | `read`, `bash`, `edit`, `write` | Tools enabled at startup. Plain names replace the defaults; `+name` adds a tool and `-name` removes one. An empty array disables all built-in tools but not extension or SDK tools. |
+| `toolViewMode` | `"collapsed" \| "summary" \| "expanded"` | `"summary"` | Tool display mode. `Ctrl+O` cycles all three modes and saves the choice. |
 | `codemode.mode` | `"on"` \| `"only"` | `"on"` | How the `codemode` tool presents tools while it is active. `on`: declared tools get a note on calling them from scripts appended to their description, and `codemode` lists only tools that are not declared. `only`: `codemode` lists every tool scripts can call, and active built-in and extension tools are hidden from the model, so it reaches them through `codemode`. |
 | `codemode.inlineBudget` | number | `3000` | Estimated tokens (characters / 4) the `codemode` tool's description may spend on tool declarations. Tools that do not fit are left out and found with `searchTools()`. `0` lists only namespaces. |
 
 Available built-in tools are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`. `defaultTools` can also name `codemode` and `tool_search`, which built-in extensions register inactive, and other extension tools registered inactive.
+
+The default `builtin:tool-display` extension supplies the fullscreen tool presentation independently of Grok:
+
+- `collapsed`: one tool-title line and status.
+- `summary`: all tool calls remain listed; long lines end with `...` instead of automatically wrapping. Multiline bash and PowerShell calls show the tool name and source-line count, then the first nonempty command line, with the rest of that call's script folded. Simple Bash chains in that entry line split at `&&`, `||`, `;`, `|` and `|&`, keeping each separator at the start of the next row and listing all segments under the single call's status. Ordinary result output stays folded. Edit, write and codemode show their call titles while keeping diff bodies, file contents and script code folded. Codemode also lists every recorded internal call on its own row without a row limit, with its existing argument preview, status and timing subject to the available width.
+- `expanded`: the original call and result rendering, including script code, diffs and output.
+
+Shell source-line counts exclude leading and trailing blank lines and include blank lines inside the script. Quoted and escaped text is not split, redirections stay with their command, complex shell syntax stays unchanged, and folded script bodies are not scanned for chains. PowerShell does not use Bash chain splitting. Summary formatting reuses the native renderers without executing commands or calling a model. The status column reserves enough space for Running so changing to Done does not change the visible excerpt. Native images and custom compact opt-outs keep their layout. Regular mode retains the original tool layout.
+
+Hover over a compact tool to preview its full details. Click the row or preview to expand that tool inline; click again to return to the global mode (summary when the global mode is expanded). Global mode changes reset individual overrides. When Grok is loaded, `/grok-ui` also selects the mode and `/grok-hover-delay` controls the preview delay. Other renderers receive the mode through `ToolRenderContext.toolViewMode`; existing renderers continue to use the `expanded` flag.
+
+Disable this presentation with `"extensions": ["-builtin:tool-display"]` or `--no-extensions`. Tools then use their original renderers; `Ctrl+O` still cycles the host's three modes. `-e builtin:tool-display` loads the extension explicitly when other extensions are disabled.
 
 A list of only `+name` and `-name` entries changes the inherited selection instead of replacing it. For example, this enables `codemode` next to the default tools:
 
@@ -175,7 +190,7 @@ Resource paths in user settings resolve from the agent directory. Paths in proje
 
 Resource arrays support glob exclusions with `!pattern`, exact inclusion with `+path`, and exact exclusion with `-path`. Pi loads resources listed in both user-level and project settings.
 
-The built-in extensions are named `builtin:mcp`, `builtin:llama.cpp`, `builtin:codemode`, and `builtin:tool-search` in `extensions`. They load by default; `-builtin:mcp` disables one. A `+builtin:<name>` or `-builtin:<name>` entry in project settings overrides the user setting. `pi config` lists them under Built-in. `--no-extensions` disables them too, and `-e builtin:<name>` loads one explicitly.
+The built-in extensions include `builtin:mcp`, `builtin:llama.cpp`, `builtin:codemode`, `builtin:tool-search`, `builtin:tool-output-context`, `builtin:thinking-steps`, and `builtin:tool-display` in `extensions`. They load by default; `-builtin:mcp` disables one. A `+builtin:<name>` or `-builtin:<name>` entry in project settings overrides the user setting. `pi config` lists them under Built-in. `--no-extensions` disables them too, and `-e builtin:<name>` loads one explicitly.
 
 ## Updates, telemetry, and warnings
 

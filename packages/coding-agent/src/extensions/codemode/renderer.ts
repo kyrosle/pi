@@ -62,6 +62,17 @@ function formatCall(call: CodemodeNestedCall, theme: Theme, expanded: boolean): 
 	return line;
 }
 
+class CodemodeResult extends Container {
+	// Tool display keeps these calls below the title while the script and output remain folded.
+	compactToolResult?: Container;
+}
+
+class CodemodeCallSummary extends Text {
+	override render(width: number): string[] {
+		return this.renderTruncated(width);
+	}
+}
+
 export const codemodeRenderers: Pick<
 	ToolDefinition<any, CodemodeToolDetails | undefined>,
 	"renderCall" | "renderResult"
@@ -73,11 +84,12 @@ export const codemodeRenderers: Pick<
 		const title = theme.fg("toolTitle", theme.bold("codemode"));
 		const component = (context.lastComponent as Container | undefined) ?? new Container();
 		component.clear();
+		const heading = new Text(code === null ? `${title} ${theme.fg("error", "[invalid arg]")}` : title, 0, 0);
+		Object.assign(component, { compactToolCall: heading });
+		component.addChild(heading);
 		if (code === null) {
-			component.addChild(new Text(`${title} ${theme.fg("error", "[invalid arg]")}`, 0, 0));
 			return component;
 		}
-		component.addChild(new Text(title, 0, 0));
 		if (code) {
 			const highlighted = highlightCode(replaceTabs(code.replace(/\r/g, "").trimEnd()), "javascript").join("\n");
 			component.addChild(
@@ -95,10 +107,15 @@ export const codemodeRenderers: Pick<
 	},
 	renderResult(result, options, theme, context) {
 		const timerText = toolTimerText(context, options.isPartial);
-		const component = (context.lastComponent as Container | undefined) ?? new Container();
+		const component = context.lastComponent instanceof CodemodeResult ? context.lastComponent : new CodemodeResult();
 		component.clear();
 		const calls = result.details?.calls ?? [];
+		const compact = new Container();
+		component.compactToolResult = calls.length > 0 ? compact : component;
 		if (calls.length > 0) {
+			compact.addChild(
+				new CodemodeCallSummary(calls.map((call) => formatCall(call, theme, false)).join("\n"), 0, 0),
+			);
 			const shown = options.expanded ? calls : calls.slice(-CALL_PREVIEW_COUNT);
 			const lines = shown.map((call) => formatCall(call, theme, options.expanded));
 			if (shown.length < calls.length) {
@@ -111,6 +128,7 @@ export const codemodeRenderers: Pick<
 			if (priced.length > 1) {
 				const total = priced.reduce((sum, call) => sum + (call.cost ?? 0), 0);
 				lines.push(theme.fg("muted", `Model calls: ${formatCost(total)}`));
+				compact.addChild(new Text(theme.fg("muted", `Model calls: ${formatCost(total)}`), 0, 0));
 			}
 			component.addChild(new Spacer(1));
 			component.addChild(new Text(lines.join("\n"), 0, 0));
@@ -123,6 +141,17 @@ export const codemodeRenderers: Pick<
 		const output = options.isPartial
 			? ""
 			: getTextOutput({ ...result, content: hasHeader ? rest : result.content }, context.showImages).trim();
+		if (context.isError && output && calls.length > 0) {
+			const errorStart = output.lastIndexOf("\nScript error:\n");
+			compact.addChild(
+				new VisualLinePreview({
+					text: theme.fg("error", replaceTabs(errorStart < 0 ? output : output.slice(errorStart + 1))),
+					maxVisualLines: OUTPUT_PREVIEW_LINES,
+					keep: "start",
+					formatHint: (hidden) => expandHint(theme, hidden, "lines"),
+				}),
+			);
+		}
 		if (output) {
 			const color = context.isError ? "error" : "toolOutput";
 			const styled = replaceTabs(output)

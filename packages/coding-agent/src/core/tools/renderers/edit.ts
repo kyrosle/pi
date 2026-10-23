@@ -30,6 +30,7 @@ type EditToolResultLike = {
 	details?: EditToolDetails;
 };
 type EditCallRenderComponent = Box & {
+	compactToolCall?: Text;
 	preview?: EditPreview;
 	previewArgsKey?: string;
 	previewPending?: boolean;
@@ -138,7 +139,9 @@ function buildEditCallComponent(
 	component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
 	component.setPaddingX(outputPad);
 	component.clear();
-	component.addChild(new Text(formatEditCall(args, theme, cwd), 0, 0));
+	const title = formatEditCall(args, theme, cwd);
+	component.compactToolCall = new Text(title, outputPad, 0);
+	component.addChild(new Text(title, 0, 0));
 
 	if (!component.preview) {
 		return component;

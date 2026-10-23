@@ -410,7 +410,7 @@ export function createShellToolDefinition(
 				clearUpdateTimer();
 			}
 		},
-		...createShellRenderers(config.prompt),
+		...createShellRenderers(config.prompt, config.label),
 	};
 }
 
