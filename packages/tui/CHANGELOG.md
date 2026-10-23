@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added optional owner matching to `hideHoverPreview(owner)` so components can dismiss their own active or pending preview without closing another component's preview
+- Added cached `Text.renderTruncated()` to keep logical lines and truncate overflow with `...`, preserving ANSI styles and hyperlinks across newlines without changing normal text wrapping
 - Exported `isImageLine()` so composed Markdown views can preserve terminal image commands when indenting text
 - Added an optional `setHoverPreviewDelay()` hook with cancellation while waiting, so extensions can configure pointer-preview timing without duplicating viewport mouse handling
 - Added an opt-in fullscreen conversation timeline with pointer previews and turn navigation, and non-capturing hover previews; the Grok extension owns its scrollable preview component

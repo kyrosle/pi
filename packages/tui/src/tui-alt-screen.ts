@@ -456,7 +456,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 	}
 
-	hideHoverPreview(): void {
+	hideHoverPreview(owner?: object): void {
+		if (owner !== undefined && owner !== this.hoverOwner) return;
 		clearTimeout(this.hoverTimer);
 		this.hoverTimer = undefined;
 		const overlay = this.hoverOverlay;

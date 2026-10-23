@@ -61,6 +61,51 @@ async function createTimeline() {
 }
 
 describe("fullscreen conversation timeline", () => {
+	it("only dismisses a visible preview for its owner or an unqualified close", async () => {
+		const h = await createTimeline();
+		try {
+			const hover = `\x1b[<35;80;${h.ticks()[0] + 1}M`;
+			h.terminal.sendInput(hover);
+			assert.equal(h.tui.hasOverlay(), true);
+			h.tui.hideHoverPreview({});
+			assert.equal(h.tui.hasOverlay(), true);
+			h.tui.hideHoverPreview(h.entries[0]);
+			assert.equal(h.tui.hasOverlay(), false);
+			h.terminal.sendInput(hover);
+			assert.equal(h.tui.hasOverlay(), true);
+			h.tui.hideHoverPreview();
+			assert.equal(h.tui.hasOverlay(), false);
+		} finally {
+			h.tui.stop();
+		}
+	});
+
+	it("only cancels a pending preview for its owner or an unqualified close", async (context) => {
+		const h = await createTimeline();
+		context.mock.timers.enable({ apis: ["setTimeout"] });
+		try {
+			h.tui.setHoverPreviewDelay(2000);
+			const hover = `\x1b[<35;80;${h.ticks()[0] + 1}M`;
+			h.terminal.sendInput(hover);
+			context.mock.timers.tick(1000);
+			h.tui.hideHoverPreview({});
+			context.mock.timers.tick(999);
+			assert.equal(h.tui.hasOverlay(), false);
+			context.mock.timers.tick(1);
+			assert.equal(h.tui.hasOverlay(), true);
+			h.tui.hideHoverPreview(h.entries[0]);
+			for (const owner of [h.entries[0], undefined]) {
+				h.terminal.sendInput(hover);
+				context.mock.timers.tick(1000);
+				h.tui.hideHoverPreview(owner);
+				context.mock.timers.tick(2000);
+				assert.equal(h.tui.hasOverlay(), false);
+			}
+		} finally {
+			h.tui.stop();
+		}
+	});
+
 	it("waits for the configured delay without restarting when the pointer moves inside the same tick", async (context) => {
 		const h = await createTimeline();
 		context.mock.timers.enable({ apis: ["setTimeout"] });
