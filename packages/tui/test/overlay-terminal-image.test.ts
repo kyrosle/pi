@@ -105,8 +105,7 @@ describe("overlays over terminal images", () => {
 			);
 			const viewport = terminal.getViewport();
 			assert.strictEqual(viewport[2]?.slice(10).trimEnd(), "SIDE", "rows below the image line show the sidebar");
-			// The image line itself still passes through, so the sidebar skips that row.
-			assert.strictEqual(viewport[1]?.trim(), "");
+			assert.strictEqual(viewport[1]?.slice(10).trimEnd(), "SIDE", "the image line also shows the sidebar");
 		} finally {
 			tui.stop();
 			resetCapabilitiesCache();

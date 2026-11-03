@@ -25,6 +25,7 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import type { ToolViewMode } from "../../core/tool-view.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { writeDiagnosticsToStderr } from "../diagnostics-stderr.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
@@ -312,6 +313,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 		setToolsExpanded(_expanded: boolean) {
 			// Tool expansion not supported in RPC mode - no TUI
+		},
+
+		getToolViewMode() {
+			return "summary";
+		},
+
+		setToolViewMode(_mode: ToolViewMode) {
+			// Tool display modes require a TUI.
 		},
 	});
 

@@ -208,6 +208,20 @@ export function isFocusable(component: Component | null): component is Component
  */
 export const CURSOR_MARKER = "\x1b_pi:c\x07";
 
+/** Zero-width marker for a conversation turn; renderers strip it before terminal output. */
+export const TRANSCRIPT_TURN_MARKER = "\x1b_pi:turn\x07";
+
+export interface TranscriptTimelineEntry {
+	preview: string;
+	timestamp?: number;
+}
+
+export interface TranscriptTimelineOptions {
+	getEntries: () => readonly TranscriptTimelineEntry[];
+	styleTick: (text: string, active: boolean, hovered: boolean, enabled: boolean) => string;
+	renderPreview: (entry: TranscriptTimelineEntry) => Component;
+}
+
 /** Fake cursor markers - zero-width APC sequences around the text drawn as the cursor. See resolveFakeCursors(). */
 export const FAKE_CURSOR_START = "\x1b_pi:fc\x07";
 export const FAKE_CURSOR_END = "\x1b_pi:/fc\x07";
@@ -486,7 +500,25 @@ export function compositeTuiLine(
 	overlayWidth: number,
 	totalWidth: number,
 ): string {
-	if (isImageLine(baseLine)) return baseLine;
+	let images = "";
+	if (isImageLine(baseLine)) {
+		const headers = [...baseLine.matchAll(/\x1b_G([^;]*);/g)];
+		if (
+			baseLine.includes("\x1b]1337;File=") ||
+			headers.length === 0 ||
+			headers.some(([, controls]) => !/^m=[01]$/.test(controls) && !/(?:^|,)C=1(?:,|$)/.test(controls))
+		)
+			return baseLine;
+		const original = baseLine;
+		// Keep image commands out of text slicing, including across stacked overlays.
+		baseLine = baseLine.replace(/(?:\x1b\[\d+G)?(?:\x1b_G[^\x1b]*\x1b\\)+/g, (sequence, offset: number) => {
+			images += sequence.startsWith("\x1b[")
+				? sequence
+				: `\x1b[${visibleWidth(original.slice(0, offset)) + 1}G${sequence}`;
+			return "";
+		});
+		if (!images || baseLine.includes("\x1b_G")) return original;
+	}
 
 	const afterStart = startCol + overlayWidth;
 	const base = extractSegments(baseLine, startCol, afterStart, totalWidth - afterStart, true);
@@ -507,15 +539,15 @@ export function compositeTuiLine(
 		base.after +
 		" ".repeat(afterPad);
 
-	return visibleWidth(result) <= totalWidth ? result : sliceByColumn(result, 0, totalWidth, true);
+	const text = visibleWidth(result) <= totalWidth ? result : sliceByColumn(result, 0, totalWidth, true);
+	return images ? `${images}\x1b[1G${text}` : text;
 }
 
 /**
  * Drop image placements that intersect an overlay rectangle (`row` is viewport-relative).
  * Terminals draw images above text, so an overlay cannot paint over them. The renderers delete a
  * placement once its line changes and draw it again when the overlay no longer covers it.
- * Images beside the overlay stay; on the row holding such an image's sequence the overlay is not
- * drawn, because `compositeTuiLine` passes image lines through.
+ * Images beside the overlay stay in place.
  */
 function hideImagesUnderOverlay(lines: string[], overlay: OverlayBounds, viewportStart: number): void {
 	if (overlay.height === 0) return;
@@ -524,13 +556,24 @@ function hideImagesUnderOverlay(lines: string[], overlay: OverlayBounds, viewpor
 		const line = lines[index]!;
 		const extent = getImageLineExtent(line);
 		if (!extent) continue;
+		let startCol = extent.startCol;
+		const kittyStart = line.indexOf("\x1b_G");
+		if (kittyStart !== -1) {
+			// Previous overlays preserve the image with an absolute column move.
+			const prefix = line.slice(0, kittyStart);
+			const position = [...prefix.matchAll(/\x1b\[(\d+)G/g)].at(-1);
+			if (position) {
+				startCol = Number(position[1]) - 1 + visibleWidth(prefix.slice(position.index + position[0].length));
+			}
+		}
+		const endCol = startCol + (extent.endCol - extent.startCol);
 		const firstRow = index + extent.firstRow - viewportStart;
 		const lastRow = index + extent.lastRow - viewportStart;
 		if (
 			firstRow < overlay.row + overlay.height &&
 			lastRow >= overlay.row &&
-			extent.startCol < overlay.col + overlay.width &&
-			extent.endCol > overlay.col
+			startCol < overlay.col + overlay.width &&
+			endCol > overlay.col
 		) {
 			lines[index] = stripImageSequences(line);
 		}
@@ -586,6 +629,13 @@ export const VIEWPORT_TUI = Symbol.for("@earendil-works/pi-tui/viewport");
 export interface ViewportTUI extends TUI {
 	readonly [VIEWPORT_TUI]: true;
 	setLayoutRoot(component: Component | undefined): void;
+	readonly transcriptViewportHeight?: number;
+	setTimeline?(options: TranscriptTimelineOptions | undefined): void;
+	setMouseHoverEnabled?(enabled: boolean): void;
+	setHoverPreviewDelay?(delayMs: number): void;
+	showHoverPreview?(owner: object, component: Component, source: TuiMouseEvent): void;
+	/** Hide the current or pending preview, optionally only when its owner matches. */
+	hideHoverPreview?(owner?: object): void;
 }
 
 export function isViewportTUI(tui: TUI): tui is ViewportTUI {
@@ -1638,8 +1688,9 @@ export abstract class TuiBase extends Container implements TUI {
 	 */
 	protected resolveFakeCursors(lines: readonly string[]): string[] {
 		return lines.map((line) => {
-			if (!line.includes(FAKE_CURSOR_START)) return line;
-			const resolved = this.showHardwareCursor ? line.replace(FOCUSED_FAKE_CURSOR, "$1$2") : line;
+			const text = line.replaceAll(TRANSCRIPT_TURN_MARKER, "");
+			if (!text.includes(FAKE_CURSOR_START)) return text;
+			const resolved = this.showHardwareCursor ? text.replace(FOCUSED_FAKE_CURSOR, "$1$2") : text;
 			return resolved.replaceAll(FAKE_CURSOR_START, "\x1b[7m").replaceAll(FAKE_CURSOR_END, "\x1b[27m");
 		});
 	}

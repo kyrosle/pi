@@ -107,6 +107,8 @@ Each boundary can be supplied explicitly:
 
 Use `DefaultResourceLoader` when you want standard discovery with selected overrides. Supply a custom `ResourceLoader` when the host owns resource storage and discovery completely.
 
+In this fork, the default SDK loader includes `builtin:tool-output-context`, which archives oversized tool results before context reduction. A custom `ResourceLoader` controls its own extensions; include the exported `createToolOutputContextExtension()` factory to retain that protection. The archive extension preserves original session results and writes private text/JSON copies; the host owns request budgeting and overflow retries.
+
 <a id="inlineextension"></a>
 
 Inline extension factories can be supplied through `DefaultResourceLoader`. Give one an `InlineExtension` name only when it needs a stable name in diagnostics and startup output. A named inline extension with `replaceable: true` is left out when another extension registers a tool, command, or flag with a name it registers during loading, instead of both loading with a conflict. The CLI's built-in codemode, tool search, and MCP extensions are replaceable. A named entry with `builtin: true` is not an inline extension: it supplies the code of the `builtin:<name>` extension, which loads like a configured extension file. It loads by default, is listed in `pi config`, and is disabled by `-builtin:<name>` in the `extensions` setting or by `noExtensions`; `additionalExtensionPaths: ["builtin:<name>"]` loads it explicitly. It loads after project trust is resolved, so it cannot handle `project_trust`. The CLI's built-in extensions use it.

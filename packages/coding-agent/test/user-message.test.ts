@@ -1,3 +1,4 @@
+import { Container, TRANSCRIPT_TURN_MARKER } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -31,9 +32,15 @@ describe("UserMessageComponent", () => {
 		const component = new UserMessageComponent("hello");
 		const first = component.render(20);
 		const second = component.render(20);
+		const shared = Container.prototype.render.call(component, 20);
 
 		expect(second).toBe(first);
+		expect(shared).not.toBe(first);
+		expect(shared.join("")).not.toContain(OSC133_ZONE_START);
+		expect(shared.join("")).not.toContain(OSC133_ZONE_END);
+		expect(shared.join("")).not.toContain(TRANSCRIPT_TURN_MARKER);
 		expect(second[0]!.split(OSC133_ZONE_START)).toHaveLength(2);
+		expect(second[0]!.split(TRANSCRIPT_TURN_MARKER)).toHaveLength(2);
 		expect(second[2]!.split(OSC133_ZONE_END)).toHaveLength(2);
 	});
 

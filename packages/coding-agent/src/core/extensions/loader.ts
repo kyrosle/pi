@@ -35,6 +35,7 @@ import type {
 	MessageRenderer,
 	ProviderConfig,
 	RegisteredCommand,
+	ThinkingRenderer,
 	ToolDefinition,
 	ToolRendererResolver,
 } from "./types.ts";
@@ -370,6 +371,11 @@ function createExtensionAPI(
 				transformer,
 				messageTypes: new Set(options?.messageTypes ?? DEFAULT_MARKDOWN_MESSAGE_TYPES),
 			};
+		},
+
+		registerThinkingRenderer(renderer: ThinkingRenderer): void {
+			assertActive();
+			extension.thinkingRenderer = renderer;
 		},
 
 		registerEntryRenderer<T>(customType: string, renderer: EntryRenderer<T>): void {

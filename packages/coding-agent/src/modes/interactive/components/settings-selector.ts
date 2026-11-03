@@ -25,6 +25,7 @@ import {
 	type TuiMode,
 	type WarningSettings,
 } from "../../../core/settings-manager.ts";
+import { THINKING_VIEW_MODES, type ThinkingViewMode } from "../../../core/thinking-view.ts";
 import {
 	getSettingsListTheme,
 	parseAutoThemeSetting,
@@ -80,7 +81,7 @@ export interface SettingsConfig {
 	currentTheme: string;
 	terminalTheme: TerminalTheme;
 	availableThemes: string[];
-	hideThinkingBlock: boolean;
+	thinkingViewMode: ThinkingViewMode;
 	mermaidRenderingMode: MermaidRenderingMode;
 	showCacheMissNotices: boolean;
 	collapseChangelog: boolean;
@@ -120,7 +121,7 @@ export interface SettingsCallbacks {
 	onModelThinkingLevelRemove: (provider: string, modelId: string) => void;
 	onThemeChange: (theme: string) => void;
 	onThemePreview?: (theme: string) => void;
-	onHideThinkingBlockChange: (hidden: boolean) => void;
+	onThinkingViewModeChange: (mode: ThinkingViewMode) => void;
 	onMermaidRenderingModeChange: (mode: MermaidRenderingMode) => void;
 	onShowCacheMissNoticesChange: (shown: boolean) => void;
 	onCollapseChangelogChange: (collapsed: boolean) => void;
@@ -537,11 +538,11 @@ export class SettingsSelectorComponent extends Container {
 				values: [...CACHE_WARMING_MODES],
 			},
 			{
-				id: "hide-thinking",
-				label: "Hide thinking",
-				description: "Hide thinking blocks in assistant responses",
-				currentValue: config.hideThinkingBlock ? "true" : "false",
-				values: ["true", "false"],
+				id: "thinking-view",
+				label: "Thinking view",
+				description: "Current step, key steps, or full thinking; hover for original text, click to expand",
+				currentValue: config.thinkingViewMode,
+				values: [...THINKING_VIEW_MODES],
 			},
 			{
 				id: "mermaid-rendering",
@@ -924,8 +925,8 @@ export class SettingsSelectorComponent extends Container {
 					case "cache-warming-mode":
 						callbacks.onCacheWarmingModeChange(newValue as CacheWarmingMode);
 						break;
-					case "hide-thinking":
-						callbacks.onHideThinkingBlockChange(newValue === "true");
+					case "thinking-view":
+						callbacks.onThinkingViewModeChange(newValue as ThinkingViewMode);
 						break;
 					case "mermaid-rendering":
 						callbacks.onMermaidRenderingModeChange(newValue as MermaidRenderingMode);

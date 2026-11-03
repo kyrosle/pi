@@ -248,6 +248,19 @@ export const SettingsSchema = Type.Object(
 		branchSummary: Type.Optional(BranchSummarySettingsSchema),
 		retry: Type.Optional(RetrySettingsSchema),
 		hideThinkingBlock: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.hideThinkingBlock })),
+		thinkingViewMode: Type.Optional(
+			Type.Union([Type.Literal("collapsed"), Type.Literal("summary"), Type.Literal("expanded")], {
+				description:
+					"Native thinking display: current step, salient steps, or full steps. Takes precedence over hideThinkingBlock.",
+				default: SETTINGS_DEFAULTS.thinkingViewMode,
+			}),
+		),
+		toolViewMode: Type.Optional(
+			Type.Union([Type.Literal("collapsed"), Type.Literal("summary"), Type.Literal("expanded")], {
+				description: "Tool display: compact title, call summary, or full output. Cycled with Ctrl+O.",
+				default: SETTINGS_DEFAULTS.toolViewMode,
+			}),
+		),
 		showCacheMissNotices: Type.Optional(
 			Type.Boolean({
 				description: "Show cache cost and provider recovery notices.",

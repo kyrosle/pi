@@ -1,4 +1,4 @@
-import { Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, TRANSCRIPT_TURN_MARKER } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
@@ -80,7 +80,7 @@ export class UserMessageComponent extends Container {
 		// Container output is shared across frames; copy it once per change instead of mutating it.
 		if (this.zoneLines?.source !== lines) {
 			const zoned = [...lines];
-			zoned[0] = OSC133_ZONE_START + zoned[0];
+			zoned[0] = OSC133_ZONE_START + TRANSCRIPT_TURN_MARKER + zoned[0];
 			zoned[zoned.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + zoned[zoned.length - 1];
 			this.zoneLines = { source: lines, lines: zoned };
 		}
