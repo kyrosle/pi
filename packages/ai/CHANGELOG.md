@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Recognized descriptive HTTP 413 payload-size errors as context overflow and stopped retrying unchanged overflowing input as a transient provider error
+
 ## [1.5.2] - 2026-11-10
 
 ### Fixed

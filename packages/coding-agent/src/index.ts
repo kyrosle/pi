@@ -79,6 +79,9 @@ export type {
 	CacheWarmingDecisionEventResult,
 	CompactionEntryDraft,
 	CompactOptions,
+	ContextBudgetEntryDraft,
+	ContextBudgetEvent,
+	ContextBudgetEventResult,
 	ContextEditEntryDraft,
 	ContextEvent,
 	ContextEventResult,
@@ -172,6 +175,9 @@ export type {
 	SourceInfo,
 	TerminalInputHandler,
 	ThinkingLevelSelectEvent,
+	ThinkingRenderComponent,
+	ThinkingRenderContext,
+	ThinkingRenderer,
 	ToolAnnotations,
 	ToolCallEvent,
 	ToolCallEventResult,
@@ -185,6 +191,7 @@ export type {
 	ToolLoadout,
 	ToolLoadoutChanges,
 	ToolNamespace,
+	ToolRenderContext,
 	ToolRendererResolver,
 	ToolRenderers,
 	ToolRenderResultOptions,
@@ -336,6 +343,7 @@ export {
 	type SkillFrontmatter,
 } from "./core/skills.ts";
 export { createSyntheticSourceInfo } from "./core/source-info.ts";
+export { isToolViewMode, TOOL_VIEW_MODES, type ToolViewMode } from "./core/tool-view.ts";
 export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.ts";
 // Tools
 export {
@@ -416,6 +424,7 @@ export { type CodemodeExtensionOptions, createCodemodeExtension } from "./extens
 export type { CodemodeStoreEntryData, CodemodeToolDetails } from "./extensions/codemode/tool.ts";
 export type { LoadedMcpConfig, McpExposure, McpServerConfig, McpServerEntry } from "./extensions/mcp/config.ts";
 export { createMcpExtension, type McpExtensionOptions, type McpTransportFactory } from "./extensions/mcp/index.ts";
+export { createToolOutputContextExtension } from "./extensions/tool-output-context/index.ts";
 export { createToolSearchExtension } from "./extensions/tool-search/index.ts";
 // Main entry point
 export { type MainOptions, main } from "./main.ts";
@@ -458,6 +467,8 @@ export {
 	LoginDialogComponent,
 	ModelSelectorComponent,
 	OAuthSelectorComponent,
+	PreviewPanel,
+	type PreviewPanelOptions,
 	type RenderDiffOptions,
 	rawKeyHint,
 	renderDiff,

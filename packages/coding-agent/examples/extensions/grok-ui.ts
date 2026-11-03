@@ -1,0 +1,308 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { userInfo } from "node:os";
+import { join } from "node:path";
+import {
+	CustomEditor,
+	type ExtensionAPI,
+	getAgentDir,
+	type KeybindingsManager,
+	PreviewPanel,
+	parseSkillBlock,
+	type Theme,
+	type ToolViewMode,
+} from "@earendil-works/pi-coding-agent";
+import {
+	Container,
+	isViewportTUI,
+	SelectList,
+	Spacer,
+	stripTerminalSequences,
+	Text,
+	type TranscriptTimelineEntry,
+	type TUI,
+	type TuiMouseEvent,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
+
+function isHoverDelay(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 0x7fffffff;
+}
+
+export class GrokMenu extends Container {
+	private getTheme: () => Theme;
+	private keybindings: KeybindingsManager;
+	private list: SelectList;
+	private title = new Text("", 1, 0);
+	private hint = new Text("", 1, 0);
+
+	constructor(
+		getTheme: () => Theme,
+		keybindings: KeybindingsManager,
+		mode: ToolViewMode,
+		done: (mode: ToolViewMode | undefined) => void,
+	) {
+		super();
+		this.getTheme = getTheme;
+		this.keybindings = keybindings;
+		this.list = new SelectList(
+			[
+				{ value: "collapsed", label: "Collapsed", description: "Tool title only" },
+				{ value: "summary", label: "Summary", description: "Internal calls, with code and output folded" },
+				{ value: "expanded", label: "Expanded", description: "Original code, calls and output" },
+				{ value: "close", label: "Return to prompt" },
+			],
+			4,
+			{
+				selectedPrefix: (text) => getTheme().fg("accent", text),
+				selectedText: (text) => getTheme().bg("selectedBg", getTheme().fg("text", text)),
+				description: (text) => getTheme().fg("muted", text),
+				scrollInfo: (text) => getTheme().fg("muted", text),
+				noMatch: (text) => getTheme().fg("muted", text),
+			},
+		);
+		this.list.setSelectedIndex(mode === "collapsed" ? 0 : mode === "summary" ? 1 : 2);
+		this.list.onSelect = (item) =>
+			done(
+				item.value === "collapsed" || item.value === "summary" || item.value === "expanded"
+					? item.value
+					: undefined,
+			);
+		this.list.onCancel = () => done(undefined);
+		this.addChild(this.title);
+		this.addChild(new Spacer(1));
+		this.addChild(this.list);
+		this.addChild(new Spacer(1));
+		this.addChild(this.hint);
+	}
+
+	handleInput(data: string): void {
+		this.list.handleInput(data);
+	}
+
+	override render(width: number): string[] {
+		const theme = this.getTheme();
+		this.title.setText(theme.fg("text", theme.bold("Display")));
+		this.hint.setText(
+			theme.fg(
+				"muted",
+				`${this.keybindings.getKeys("tui.select.confirm").join("/")} select   ${this.keybindings.getKeys("tui.select.cancel").join("/")} close\nHover delay: /grok-hover-delay <ms>`,
+			),
+		);
+		const innerWidth = Math.max(1, width - 2);
+		const lines = super.render(innerWidth);
+		const border = (text: string) => theme.fg("borderMuted", text);
+		const result = [border(`╭${"─".repeat(innerWidth)}╮`)];
+		for (const line of lines) {
+			const text = truncateToWidth(line, innerWidth);
+			result.push(border("│") + text + " ".repeat(innerWidth - visibleWidth(text)) + border("│"));
+		}
+		result.push(border(`╰${"─".repeat(innerWidth)}╯`));
+		return result.map((line) => theme.bg("toolPendingBg", truncateToWidth(line, width)));
+	}
+
+	override handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]> {
+		if (event.x < 1 || event.y < 1 || event.x >= event.width - 1 || event.y >= event.height - 1) return undefined;
+		return super.handleMouse({
+			...event,
+			x: event.x - 1,
+			y: event.y - 1,
+			width: event.width - 2,
+			height: event.height - 2,
+		});
+	}
+}
+
+export default function grokUi(pi: ExtensionAPI): void {
+	let activeTui: TUI | undefined;
+	let hoverDelayMs = 2000;
+	let settings: Record<string, unknown> = {};
+	const settingsPath = join(getAgentDir(), "grok-ui.json");
+	let username: string | undefined;
+	try {
+		username = userInfo().username;
+	} catch {
+		// userInfo() throws when the uid has no passwd entry (some containers); user headings are skipped then.
+	}
+	pi.registerMarkdownTransformer((markdown, { messageType, model }) => {
+		if (!markdown.trim() || messageType === "assistant-thinking") return markdown;
+		const label = messageType === "user" ? username : model;
+		if (!label) return markdown;
+		const title = stripTerminalSequences(label);
+		const fence = "`".repeat((title.match(/`+/g) ?? []).reduce((length, run) => Math.max(length, run.length + 1), 1));
+		const heading = `**${fence} ${title} ${fence}**\n\n`;
+		return markdown.startsWith(heading) ? markdown : heading + markdown;
+	});
+
+	pi.on("session_start", async (_event, ctx) => {
+		if (ctx.mode !== "tui") return;
+		hoverDelayMs = 2000;
+		settings = {};
+		try {
+			const value: unknown = JSON.parse(await readFile(settingsPath, "utf8"));
+			if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a JSON object");
+			settings = value as Record<string, unknown>;
+			if ("hoverDelayMs" in value && !isHoverDelay(value.hoverDelayMs))
+				throw new Error("hoverDelayMs must be an integer between 0 and 2147483647 milliseconds");
+			if (isHoverDelay(settings.hoverDelayMs)) hoverDelayMs = settings.hoverDelayMs;
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+				ctx.ui.notify(`Could not load Grok UI settings: ${String(error)}`, "warning");
+		}
+		let leaf: string | null | undefined;
+		let timelineEntries: TranscriptTimelineEntry[] = [];
+		ctx.ui.setHeader((tui) => {
+			activeTui = tui;
+			let mode: TUI["mode"] | undefined;
+			const configureTimeline = () => {
+				if (mode === tui.mode) return;
+				mode = tui.mode;
+				if (isViewportTUI(tui)) {
+					tui.setHoverPreviewDelay?.(hoverDelayMs);
+					tui.setMouseHoverEnabled?.(true);
+					tui.setTimeline?.({
+						getEntries() {
+							const currentLeaf = ctx.sessionManager.getLeafId();
+							if (currentLeaf === leaf) return timelineEntries;
+							leaf = currentLeaf;
+							timelineEntries = [];
+							for (const entry of ctx.sessionManager.buildContextEntries()) {
+								if (entry.type !== "message" || entry.message.role !== "user") continue;
+								const content = entry.message.content;
+								const preview =
+									typeof content === "string"
+										? content
+										: content
+												.filter((block) => block.type === "text")
+												.map((block) => block.text)
+												.join("\n");
+								if (preview) {
+									const skill = parseSkillBlock(preview);
+									timelineEntries.push({
+										preview: skill ? skill.userMessage || `[skill] ${skill.name}` : preview,
+										timestamp: entry.message.timestamp,
+									});
+								}
+							}
+							return timelineEntries;
+						},
+						styleTick: (text, active, hovered, enabled) => {
+							const theme = ctx.ui.theme;
+							const styled = theme.fg(active || hovered ? "text" : "muted", text);
+							return active
+								? theme.bold(styled)
+								: enabled
+									? styled
+									: theme.style(text, { fg: "muted", dim: true });
+						},
+						renderPreview: (entry) =>
+							new PreviewPanel(
+								{
+									render(width) {
+										const date = entry.timestamp === undefined ? undefined : new Date(entry.timestamp);
+										const time =
+											date && Number.isFinite(date.getTime()) ? date.toLocaleString() : "Time unavailable";
+										return new Text(
+											`${ctx.ui.theme.fg("muted", time)}\n${ctx.ui.theme.fg("text", stripTerminalSequences(entry.preview).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ""))}`,
+											0,
+											0,
+										).render(width);
+									},
+									invalidate() {},
+								},
+								{
+									maxHeight: () =>
+										Math.min(
+											8,
+											Math.floor(tui.terminal.rows * 0.7),
+											tui.transcriptViewportHeight ?? tui.terminal.rows,
+										),
+									border: (text) => ctx.ui.theme.fg("borderMuted", text),
+									background: (text) => ctx.ui.theme.bg("toolPendingBg", text),
+								},
+							),
+					});
+				}
+			};
+			configureTimeline();
+			return {
+				render(width) {
+					configureTimeline();
+					const theme = ctx.ui.theme;
+					const model = ctx.model?.id ?? "No model selected";
+					return [
+						truncateToWidth(
+							theme.fg("text", theme.bold(model)) + theme.fg("muted", "  Grok UI prototype"),
+							width,
+						),
+						truncateToWidth(theme.fg("muted", "Message below. /grok-ui opens display options."), width),
+					];
+				},
+				invalidate() {},
+			};
+		});
+		ctx.ui.setEditorComponent(
+			(tui, theme, keybindings) =>
+				new CustomEditor(tui, theme, keybindings, { paddingX: 1, embedWorkingStatus: true }),
+		);
+	});
+
+	pi.on("session_shutdown", () => {
+		if (activeTui && isViewportTUI(activeTui)) {
+			activeTui.hideHoverPreview?.();
+			activeTui.setTimeline?.(undefined);
+			activeTui.setHoverPreviewDelay?.(0);
+		}
+		activeTui = undefined;
+	});
+
+	pi.registerCommand("grok-hover-delay", {
+		description: "Set hover preview delay in milliseconds (default: 2000; 0: immediate)",
+		handler: async (args, ctx) => {
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("Hover preview settings require interactive mode.", "info");
+				return;
+			}
+			if (!args.trim()) {
+				ctx.ui.notify(
+					`Hover preview delay: ${hoverDelayMs} ms. Set with /grok-hover-delay <milliseconds>.`,
+					"info",
+				);
+				return;
+			}
+			const delay = Number(args.trim());
+			if (!isHoverDelay(delay)) {
+				ctx.ui.notify("Use an integer between 0 and 2147483647 milliseconds.", "error");
+				return;
+			}
+			const nextSettings = { ...settings, hoverDelayMs: delay };
+			try {
+				await mkdir(getAgentDir(), { recursive: true });
+				await writeFile(settingsPath, `${JSON.stringify(nextSettings, null, 2)}\n`, { mode: 0o600 });
+			} catch (error) {
+				ctx.ui.notify(`Could not save Grok UI settings: ${String(error)}`, "error");
+				return;
+			}
+			settings = nextSettings;
+			hoverDelayMs = delay;
+			if (activeTui && isViewportTUI(activeTui)) activeTui.setHoverPreviewDelay?.(delay);
+			ctx.ui.notify(`Hover preview delay: ${delay} ms. Saved to ${settingsPath}.`, "info");
+		},
+	});
+
+	pi.registerCommand("grok-ui", {
+		description: "Open Grok display options",
+		handler: async (_args, ctx) => {
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("Grok display options require interactive mode.", "info");
+				return;
+			}
+			const mode = await ctx.ui.custom<ToolViewMode | undefined>(
+				(_tui, _theme, keybindings, done) =>
+					new GrokMenu(() => ctx.ui.theme, keybindings, ctx.ui.getToolViewMode(), done),
+				{ overlay: true, overlayOptions: { anchor: "center", width: "70%", maxHeight: "80%", margin: 1 } },
+			);
+			if (mode) ctx.ui.setToolViewMode(mode);
+		},
+	});
+}

@@ -2,11 +2,47 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added one-line thinking excerpts with source-line counts, fullscreen hover previews and individual click-to-expand behavior, retaining Markdown caches while collapsed
+- Added a Grok UI prototype extension with a conversation timeline and a display-options overlay using Pi's fullscreen layout and extension APIs
+
+### Changed
+
+- Moved Thinking Steps grouping, summaries, role styling and pointer previews into the default `builtin:thinking-steps` extension through `registerThinkingRenderer()`, retaining native Markdown caches, three view modes and per-block expansion controls
+- Moved tool statuses, compact fullscreen titles, internal-call summaries and hover previews from Grok into the independent default `builtin:tool-display` extension through `registerToolRenderer()`, retaining three view modes, clicks and renderer reuse; Grok-only launches with `--no-extensions` now need `-e builtin:tool-display` for that presentation
+- Changed `Ctrl+O` to cycle persisted collapsed, summary and expanded tool views, with internal-call summaries, full hover previews and individual click-to-expand behavior
+- Changed compact codemode rows to retain internal tool calls, arguments, statuses and durations while keeping script code and normal output in the expanded or hover view
+- Changed tool summaries to list all tool calls and recorded codemode internal calls without a row limit, fold multiline bash or PowerShell scripts to their source-line count and entry line, and split simple Bash entry-line `&&`, `||`, `;`, `|` and `|&` chains into rows with their separators preserved under one call status; long lines use `...`, full calls remain available in hover and expanded views, and reserved status width keeps excerpts stable at completion
+- Changed Thinking Steps summaries to use role icons and colors, emphasize the active step, and wrap long summaries; summaries select salient source sentences beyond the opening line while preserving render caches and mouse interactions
+- Changed thinking display to collapsed, summary, and expanded step views, with `/thinking-steps`, configurable Alt+T cycling, and a persisted `thinkingViewMode` setting; retained Markdown caches, full-text hover previews, and individual click-to-expand behavior
+- Changed Grok input to use the native editor's top and bottom horizontal rules, removing side borders and the duplicate model/thinking caption while retaining embedded working status
+- Changed Grok message headings to show the system username and each reply's recorded model ID, with one heading when the extension is loaded twice, and the Grok header to show the current model ID
+- Added the assistant message's model ID to Markdown transformer context
+- Shared the preview panel between tool-display and Thinking Steps extensions, retaining host support for pointer lifecycle and expanding individual blocks
+- Moved complete tool-output archiving and bounded excerpts into a default built-in extension, using a validated context-budget hook while keeping request preflight and overflow recovery in the host
+- Changed Grok hover previews to wait two seconds by default, with `/grok-hover-delay` persisting an extension-owned delay setting
+- Changed the Grok UI prototype to distinguish user messages and replies with role headings and a blue-gray user background, while reducing emphasis on thinking and tool output
+- Reused upstream Markdown slots and code-highlighting caches while retaining Thinking Steps lifecycle and history scrolling caches
+- Moved shell-chain summaries, script folding and compact edit/write titles into `builtin:tool-display`, leaving the built-in tool renderers unchanged from upstream
+- Skipped Mermaid parsing for text without a Mermaid fence, reducing per-update render cost for long responses
+
 ### Fixed
 
 - Fixed pi exiting with an uncaught `AbortError` when a `read` tool call is cancelled while the file is being opened ([#11956](https://github.com/earendil-works/pi/issues/11956))
 - Fixed pi exiting with an uncaught `AbortError` when the session picker cancels loading after skipping a `.jsonl` file that is not a session, and fixed such files staying open ([#11956](https://github.com/earendil-works/pi/issues/11956))
 - Fixed `/share` crashing pi when the GitHub CLI fails to start
+- Fixed thinking-renderer components retaining resources after messages leave the transcript, streaming components are removed, or the interactive UI stops; disposed components' callbacks no longer trigger redraws
+- Fixed the default tool-display extension dropping tool results when rendering without a TUI, including HTML exports
+- Fixed Thinking Steps summary omitting steps; it now shows every numbered summary in source order, and expanded mode or a single click displays the complete original thinking without generated step headings or grouping
+- Fixed repeated layout of unchanged assistant messages and Thinking Steps during fullscreen scrolling, while retaining hover previews, clicks, and cache refreshes on content, width, mode, and theme changes
+- Fixed Thinking Steps summaries dropping negation or uncertainty across wrapped lines and incorrectly presenting qualified statements as failures or successes
+- Fixed duplicate Grok theme warnings by using the installed theme discovery link instead of loading the theme again through launcher arguments
+- Fixed the source launcher treating CLI subcommands such as `pi list` as chat prompts; subcommands now pass through without prepended interactive options
+- Fixed source installs being shadowed by the old local-release launcher in `~/.bun/bin/pi`; recognized legacy wrappers now follow the source installation and are restored on uninstall
+- Fixed oversized tool results blocking context-overflow recovery: complete results remain in history and private text/JSON files while requests use bounded excerpts, preserve tool-call pairing, and are checked after compaction
+- Fixed oversized summary requests by splitting and merging transcripts and reducing chunk size after an input-size rejection
+- Fixed `/compact` custom instructions being dropped when a split-turn summary requires chunking and merging ([#11058](https://github.com/earendil-works/pi/issues/11058))
 
 ## [1.5.2] - 2026-11-10
 

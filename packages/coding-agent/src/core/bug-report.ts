@@ -362,6 +362,8 @@ export async function generateBugReportSummary(options: GenerateBugReportSummary
 		requestOptions,
 		options.streamFn,
 		options.retry,
+		undefined,
+		BUG_SUMMARY_INSTRUCTIONS,
 	);
 	if (response.stopReason === "aborted") throw new Error("Bug report summary was cancelled");
 	const failure = getSummarizationFailure(response, "Bug report summary");

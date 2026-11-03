@@ -1,0 +1,15 @@
+{
+	"theme": "grok",
+	"tuiMode": "fullscreen",
+	"extensions": [
+		"~/.pi/agent/extensions/grok-ui.js",
+		"~/.tpi/agent/extensions/grok-ui.js",
+		"!grok-ui.js"
+	],
+	"themes": [
+		"~/.pi/agent/themes/grok.json",
+		"~/.tpi/agent/themes/grok.json",
+		"!**/.pi/agent/themes/grok.json",
+		"!**/.tpi/agent/themes/grok.json"
+	]
+}

@@ -17,6 +17,8 @@ export interface ScrollViewOptions {
 export interface ScrollViewScrollToOptions {
 	/** Keep follow-end disabled even when the target is the current content end. */
 	disableFollow?: boolean;
+	/** Allow an anchor near the end of the document to occupy the top viewport row. */
+	allowOverscroll?: boolean;
 }
 
 export class ScrollView extends Container {
@@ -37,6 +39,8 @@ export class ScrollView extends Container {
 	private transientScrollbarVisible = false;
 	private scrollbarActive = false;
 	private scrollbarHideTimer: NodeJS.Timeout | undefined;
+	private rightGutter = 0;
+	private overscrollTarget = 0;
 
 	constructor(component: Component, options: ScrollViewOptions = {}) {
 		super();
@@ -71,6 +75,17 @@ export class ScrollView extends Container {
 		return this.currentScrollbar;
 	}
 
+	get rightGutterWidth(): number {
+		return this.rightGutter;
+	}
+
+	setRightGutterWidth(width: number): void {
+		const next = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+		if (next === this.rightGutter) return;
+		this.rightGutter = next;
+		this.requestRenderCallback?.();
+	}
+
 	get isScrollbarVisible(): boolean {
 		if (this.scrollbar === "always") return this.currentViewportHeight > 0;
 		return (
@@ -91,7 +106,8 @@ export class ScrollView extends Container {
 	}
 
 	getContentWidth(width: number): number {
-		return this.scrollbar === "always" && width > 1 ? width - 1 : width;
+		const available = Math.max(1, width - this.rightGutter);
+		return this.scrollbar === "always" && available > 1 ? available - 1 : available;
 	}
 
 	private markScrollbarActivity(): void {
@@ -126,7 +142,9 @@ export class ScrollView extends Container {
 
 	scrollTo(scrollTop: number, options: ScrollViewScrollToOptions = {}): void {
 		const requested = Number.isFinite(scrollTop) ? Math.trunc(scrollTop) : this.currentScrollTop;
-		const maxScrollTop = Math.max(0, this.contentHeight - this.currentViewportHeight);
+		this.overscrollTarget =
+			options.allowOverscroll === true ? Math.max(0, Math.min(this.contentHeight - 1, requested)) : 0;
+		const maxScrollTop = Math.max(0, this.contentHeight - this.currentViewportHeight, this.overscrollTarget);
 		const next = Math.max(0, Math.min(maxScrollTop, requested));
 		const nextFollowSuppressedAtEnd = options.disableFollow === true && next === maxScrollTop;
 		const nextFollowingEnd = !nextFollowSuppressedAtEnd && this.followEnd && next === maxScrollTop;
@@ -148,13 +166,15 @@ export class ScrollView extends Container {
 	scrollBy(lines: number): number {
 		const requested = Number.isFinite(lines) ? Math.trunc(lines) : 0;
 		if (requested === 0) return 0;
-		const maxScrollTop = Math.max(0, this.contentHeight - this.currentViewportHeight);
+		const naturalEnd = Math.max(0, this.contentHeight - this.currentViewportHeight);
+		const maxScrollTop = Math.max(naturalEnd, this.overscrollTarget);
 		const start = this.followingEnd ? maxScrollTop : this.currentScrollTop;
 		const next = Math.max(0, Math.min(maxScrollTop, start + requested));
 		const moved = next - start;
 		const wasFollowingEnd = this.followingEnd;
 		this.currentScrollTop = next;
-		this.followingEnd = this.followEnd && next === maxScrollTop;
+		if (next <= naturalEnd) this.overscrollTarget = 0;
+		this.followingEnd = this.followEnd && next === naturalEnd && this.overscrollTarget === 0;
 		this.followSuppressedAtEnd = false;
 		if (moved !== 0) this.markScrollbarActivity();
 		if (moved !== 0 || this.followingEnd !== wasFollowingEnd) this.requestRenderCallback?.();
@@ -162,6 +182,7 @@ export class ScrollView extends Container {
 	}
 
 	scrollToStart(): void {
+		this.overscrollTarget = 0;
 		const changed =
 			this.currentScrollTop !== 0 ||
 			this.followingEnd !== (this.followEnd && this.contentHeight <= this.currentViewportHeight);
@@ -175,6 +196,7 @@ export class ScrollView extends Container {
 	}
 
 	scrollToEnd(): void {
+		this.overscrollTarget = 0;
 		const next = Math.max(0, this.contentHeight - this.currentViewportHeight);
 		const changed = this.currentScrollTop !== next || this.followingEnd !== this.followEnd;
 		this.currentScrollTop = next;
@@ -190,7 +212,8 @@ export class ScrollView extends Container {
 		this.contentHeight = Math.max(0, Math.floor(contentHeight));
 		this.currentViewportHeight = Math.max(0, Math.floor(viewportHeight));
 		this.requestRenderCallback = requestRender;
-		const maxScrollTop = Math.max(0, this.contentHeight - this.currentViewportHeight);
+		this.overscrollTarget = Math.min(this.overscrollTarget, Math.max(0, this.contentHeight - 1));
+		const maxScrollTop = Math.max(0, this.contentHeight - this.currentViewportHeight, this.overscrollTarget);
 		if (this.followingEnd) this.currentScrollTop = maxScrollTop;
 		else this.currentScrollTop = Math.max(0, Math.min(this.currentScrollTop, maxScrollTop));
 		if (this.currentScrollTop < maxScrollTop) this.followSuppressedAtEnd = false;
@@ -215,7 +238,7 @@ export class ScrollView extends Container {
 	override render(width: number): string[] {
 		const contentWidth = this.getContentWidth(width);
 		const lines = this.child.render(contentWidth);
-		return contentWidth === width ? lines : lines.map((line) => `${line} `);
+		return contentWidth === width ? lines : lines.map((line) => `${line}${" ".repeat(width - contentWidth)}`);
 	}
 
 	[LAYOUT_NODE](): ScrollLayoutNode {
