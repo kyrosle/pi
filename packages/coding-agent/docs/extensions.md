@@ -843,6 +843,12 @@ pi.on("context_with_system", async (event, ctx) => {
 
 Rules: keep a system message at index 0 (providers read the prompt and initial tool declarations there; Pi reports an error if a handler drops it). Removing a system message removes the tool declarations and section patches it carries. Check your output with `getCurrentSystemPrompt()` and `getCurrentTools()` from `@earendil-works/pi-ai`. Handlers run in extension load order; a `systemPrompt` forced from `before_agent_start` is still projected onto the request afterwards.
 
+#### context_budget
+
+This fork also exposes `context_budget` when the host prepares oversized context or retries an overflow. The host supplies a tool-content byte budget in `maxBytes` and the projected conversation in `context`. Handlers may return `custom` and `context_edit` drafts; the host validates the combined projection and commits only after every handler succeeds. A handler failure stops the request. When `maxBytes` is omitted, the event only queries recovery metadata and must not return edits. `recoveryContext` supplies references to keep when recovery summarizes the entire conversation. The built-in `tool-output-context` extension uses this hook to archive complete results before replacing their model-facing content with bounded excerpts.
+
+The archive extension loads by default. `--no-extensions` or the `-builtin:tool-output-context` extension setting disables it; use `--extension builtin:tool-output-context` to load it explicitly while other extensions are disabled. Request preflight and overflow recovery remain host behavior.
+
 #### before_provider_headers
 
 Fired after the outgoing HTTP headers are assembled. Use it to add, override, or remove request headers.
@@ -1842,6 +1848,16 @@ pi.registerMarkdownTransformer((markdown) => markdown.replaceAll(":warning:", "â
 
 If a transformer throws, Pi keeps the Markdown produced so far and continues with the next transformer. The hook is display-only: the original message remains unchanged in the session and model context. It runs for new messages, assistant streaming updates, restored session messages, and terminal width changes, so transformers should remain synchronous and inexpensive. An extension has one transformer; registering again replaces it.
 
+### pi.registerThinkingRenderer(renderer)
+
+`pi.registerThinkingRenderer((thinking, theme, context) => component)` replaces the interactive presentation of each consecutive run of thinking blocks. The first registered renderer in extension load order wins. Return `undefined` to use the original Markdown or hidden-thinking label; the host also uses this fallback when the renderer factory throws. Rendering does not modify stored messages or model context.
+
+The host supplies `context.markdown`, its cached renderer for the complete original thinking, and `context.lastComponent`, the extension component from the previous update of that run. Reuse both to retain incremental parsing and code highlighting. `context.mode` is the effective collapsed, summary or expanded view, including local click overrides; `isStreaming` and `active` describe streaming state. `hiddenLabel`, `outputPad` and optional `tui` carry the existing presentation settings.
+
+Call `context.setExpanded(true)` to expand that run, or `false` to return to the globally selected compact view (summary when globally expanded). `context.invalidate()` clears the parent line cache and requests a render after extension-owned state changes, without discarding Markdown caches. A component's optional `dispose()` runs when its thinking run disappears, its component is replaced, its message leaves the transcript, or the interactive UI stops. It should release only resources it owns. Callbacks no longer change expansion state or request redraws after the host message is disposed.
+
+The default CLI `builtin:thinking-steps` extension owns grouping, summaries, roles, hover panels and pointer handling. The host retains original Markdown caching, global view controls and per-run expansion state. `-builtin:thinking-steps` or `--no-extensions` disables it; `-e builtin:thinking-steps` loads it explicitly. A different registered renderer can replace it. See [`thinking-steps/`](../src/extensions/thinking-steps/) and [Thinking settings](settings.md#model-and-thinking).
+
 ### pi.registerEntryRenderer(customType, renderer)
 
 Register a custom TUI renderer for custom entries with your `customType`. Custom entries are created with `pi.appendEntry()` and do not participate in LLM context.
@@ -2553,6 +2569,14 @@ pi.registerTool({
 - `keyText()`, `keyHint()` - format the user's configured keybindings, see [Keybinding Hints](#keybinding-hints)
 
 Use `context.state` for cross-slot shared state. Keep slot-local caches on the returned component instance when you want to reuse and mutate the same component across renders.
+
+In this fork, interactive tool render contexts also expose optional `tui`, `toolViewMode` and `setExpanded(expanded)` fields. They let an extension distinguish collapsed, summary and expanded views, show a pointer preview and expand that one tool without changing other rows. Renderers must still work when these fields are absent, such as in HTML exports.
+
+The default CLI `builtin:tool-display` extension wraps the renderers returned by `next()` to supply tool statuses, fullscreen call summaries, internal-call summaries and hover previews. Collapsed mode keeps one title line. Summary mode lists all tool calls and supplied internal-call entries without a row limit, truncating long lines with `...`; ordinary result output stays folded. A single call's script body can stay folded through its native renderer's `compactToolCall` metadata. Standard `Text` components use `renderTruncated()` to retain original newlines without automatic wrapping; custom layout components keep their own row layout. The status column reserves enough space for Running so completion does not change the visible excerpt. Summary formatting does not execute shell commands or call a model. Hover and expanded views retain full call contents.
+
+Call components can expose a `compactToolCall` component for this presentation. Bash and PowerShell use it for multiline commands: summary shows the tool name and source-line count, then the first nonempty command line, keeping the rest of that call folded. The count excludes leading and trailing blank lines but includes blank lines inside the script. In simple Bash chains on that entry line, `&&`, `||`, `;`, `|` and `|&` put each subsequent command on its own row with the separator preserved as its prefix. All chain segments remain listed, with long rows truncated using `...`, and share the status of the single tool call. Quoted and escaped text is not split; redirections such as `>|`, `>&`, `&>` and `&>>` stay with their command. Complex syntax, including background `&`, case terminators and control statements, stays unchanged, and folded script bodies are not scanned for chains. PowerShell does not use Bash chain splitting. Edit, write and codemode use the same metadata to keep diff bodies, file contents and script code out of summary mode while retaining their call titles. `compactToolCall: false` opts out of compaction. Result components can expose a `compactToolResult` component below the call; codemode supplies its recorded internal calls this way. These are component metadata conventions consumed by `builtin:tool-display`, not additional host callbacks. The extension preserves renderer state and component reuse, native images and compact opt-outs. Regular mode and launches without the display extension retain the original tool layout.
+
+This presentation works independently of Grok. Disable it with `"extensions": ["-builtin:tool-display"]` or `--no-extensions`, or load it explicitly with `-e builtin:tool-display`. Without it, tools use their original renderers. `Ctrl+O` and `ctx.ui.getToolViewMode()` / `setToolViewMode()` remain host controls. See [`tool-display/`](../src/extensions/tool-display/) and [Tool settings](settings.md#tools).
 
 #### renderCall
 

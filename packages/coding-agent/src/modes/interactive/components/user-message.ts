@@ -1,4 +1,4 @@
-import { Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, TRANSCRIPT_TURN_MARKER } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
@@ -76,7 +76,7 @@ export class UserMessageComponent extends Container {
 			return lines;
 		}
 
-		lines[0] = OSC133_ZONE_START + lines[0];
+		lines[0] = OSC133_ZONE_START + TRANSCRIPT_TURN_MARKER + lines[0];
 		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
 		return lines;
 	}

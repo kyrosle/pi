@@ -236,6 +236,10 @@ markdownParser.use({
 	extensions: [...LATEX_MARKDOWN_EXTENSIONS],
 });
 
+// Bound the source, rendered lines, and highlighting kept during a burst of renders.
+const BLOCK_CACHE_MAX_RECORDS = 4096;
+const BLOCK_CACHE_MAX_BYTES = 1024 * 1024;
+
 /**
  * Default text styling for markdown content.
  * Applied to all text unless overridden by markdown formatting.
@@ -301,9 +305,11 @@ interface RenderedBlock {
 	/** Width and type of the following block (which decides the spacing) that the lines were rendered for. */
 	width: number;
 	nextTokenType: string | undefined;
+	hyperlinks: boolean;
 	lines: string[];
 	/** Highlighted lines of the block's code, keyed by language and source; they survive a resize or new spacing. */
 	highlightedCode: Map<string, string[]>;
+	bytes: number;
 }
 
 export class Markdown implements Component {
@@ -319,6 +325,7 @@ export class Markdown implements Component {
 	private cachedText?: string;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
+	private cachedHyperlinks?: boolean;
 	// Parsed tokens depend only on the source, so they survive theme and width invalidation. Held weakly: a token tree is
 	// about ten times the size of its source, and every message of a long transcript keeps a Markdown component. The
 	// tokens survive a burst of re-renders, such as a theme preview, and are collected afterwards.
@@ -366,8 +373,14 @@ export class Markdown implements Component {
 	}
 
 	render(width: number): string[] {
+		const hyperlinks = getCapabilities().hyperlinks;
 		// Check cache
-		if (this.cachedLines && this.cachedText === this.text && this.cachedWidth === width) {
+		if (
+			this.cachedLines &&
+			this.cachedText === this.text &&
+			this.cachedWidth === width &&
+			this.cachedHyperlinks === hyperlinks
+		) {
 			return this.cachedLines;
 		}
 
@@ -383,6 +396,7 @@ export class Markdown implements Component {
 			this.cachedText = this.text;
 			this.cachedWidth = width;
 			this.cachedLines = result;
+			this.cachedHyperlinks = hyperlinks;
 			return result;
 		}
 
@@ -406,15 +420,35 @@ export class Markdown implements Component {
 		const blocks = new Map<string, RenderedBlock>();
 		this.blocks = new WeakRef(blocks);
 		const contentLines: string[] = [];
+		let cacheBytes = 0;
 		for (let i = 0; i < tokens.length; i++) {
 			const token = tokens[i];
 			const nextTokenType = tokens[i + 1]?.type;
-			const reused = reuseBlocks ? (blocks.get(token.raw) ?? previousBlocks?.get(token.raw)) : undefined;
-			const block = reused ?? { width: -1, nextTokenType, lines: [], highlightedCode: new Map() };
-			if (block.width !== width || block.nextTokenType !== nextTokenType) {
+			const retained = reuseBlocks ? blocks.get(token.raw) : undefined;
+			const retainedBytes = retained?.bytes ?? 0;
+			const reused = reuseBlocks ? (retained ?? previousBlocks?.get(token.raw)) : undefined;
+			const block = reused ?? {
+				width: -1,
+				nextTokenType,
+				hyperlinks,
+				lines: [],
+				highlightedCode: new Map(),
+				bytes: 0,
+			};
+			if (block.width !== width || block.nextTokenType !== nextTokenType || block.hyperlinks !== hyperlinks) {
 				this.renderBlock(block, token, nextTokenType, width, contentWidth);
+				block.hyperlinks = hyperlinks;
 			}
-			if (reuseBlocks) blocks.set(token.raw, block);
+			if (reuseBlocks) {
+				const bytes = cacheBytes - retainedBytes + block.bytes;
+				if ((retained || blocks.size < BLOCK_CACHE_MAX_RECORDS) && bytes <= BLOCK_CACHE_MAX_BYTES) {
+					blocks.set(token.raw, block);
+					cacheBytes = bytes;
+				} else if (retained) {
+					blocks.delete(token.raw);
+					cacheBytes -= retainedBytes;
+				}
+			}
 			for (const line of block.lines) {
 				contentLines.push(line);
 			}
@@ -437,6 +471,7 @@ export class Markdown implements Component {
 		this.cachedText = this.text;
 		this.cachedWidth = width;
 		this.cachedLines = result;
+		this.cachedHyperlinks = hyperlinks;
 
 		return result.length > 0 ? result : [""];
 	}
@@ -475,6 +510,12 @@ export class Markdown implements Component {
 		block.lines = lines;
 		block.width = width;
 		block.nextTokenType = nextTokenType;
+		block.bytes = token.raw.length * 2 + lines.length * 8 + 64;
+		for (const line of lines) block.bytes += line.length * 2;
+		for (const [key, highlighted] of block.highlightedCode) {
+			block.bytes += key.length * 2 + highlighted.length * 8 + 32;
+			for (const line of highlighted) block.bytes += line.length * 2;
+		}
 	}
 
 	/**

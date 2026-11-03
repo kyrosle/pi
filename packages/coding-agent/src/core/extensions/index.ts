@@ -53,6 +53,9 @@ export type {
 	CompactionEntryDraft,
 	// Context
 	CompactOptions,
+	ContextBudgetEntryDraft,
+	ContextBudgetEvent,
+	ContextBudgetEventResult,
 	ContextEditEntryDraft,
 	// Events - Agent
 	ContextEvent,
@@ -176,6 +179,9 @@ export type {
 	SetThinkingLevelHandler,
 	TerminalInputHandler,
 	ThinkingLevelSelectEvent,
+	ThinkingRenderComponent,
+	ThinkingRenderContext,
+	ThinkingRenderer,
 	ToolAnnotations,
 	// Events - Tool
 	ToolCallEvent,
@@ -193,6 +199,7 @@ export type {
 	ToolLoadout,
 	ToolLoadoutChanges,
 	ToolNamespace,
+	ToolRenderContext,
 	ToolRendererResolver,
 	ToolRenderers,
 	ToolRenderResultOptions,

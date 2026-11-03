@@ -2,9 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `Text.getText()` to read the original source without wrapping or padding, so composed renderers can preserve custom and redacted titles
+- Added optional owner matching to `hideHoverPreview(owner)` so components can dismiss their own active or pending preview without closing another component's preview
+- Added cached `Text.renderTruncated()` to keep logical lines and truncate overflow with `...`, preserving ANSI styles and hyperlinks across newlines without changing normal text wrapping
+- Exported `isImageLine()` so composed Markdown views can preserve terminal image commands when indenting text
+- Added an optional `setHoverPreviewDelay()` hook with cancellation while waiting, so extensions can configure pointer-preview timing without duplicating viewport mouse handling
+- Added an opt-in fullscreen conversation timeline with pointer previews and turn navigation, and non-capturing hover previews; the Grok extension owns its scrollable preview component
+
+### Changed
+
+- Bounded the native Markdown rendered-block cache to 1MiB and 4096 entries, and refreshed cached output when terminal hyperlink support changes. Increased the bounded non-ASCII width cache to avoid slower resize after streaming
+
 ### Fixed
 
 - Fixed Markdown rendering HTML comments (`<!-- ... -->`) as visible text ([#11710](https://github.com/earendil-works/pi/issues/11710))
+- Reduced fullscreen scrolling work by directly painting text beside reserved scrollbar columns without repeatedly slicing and compositing each row
+- Fixed native Kitty image rows interrupting hover previews and overlays; image data and placement survive text compositing, and overlapping images temporarily draw below overlay backgrounds
 
 ## [1.5.0] - 2026-11-02
 

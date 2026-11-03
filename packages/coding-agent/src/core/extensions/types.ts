@@ -83,6 +83,8 @@ import type { Settings } from "../settings-manager.ts";
 import type { SlashCommandInfo } from "../slash-commands.ts";
 import type { SourceInfo } from "../source-info.ts";
 import type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
+import type { ThinkingViewMode } from "../thinking-view.ts";
+import type { ToolViewMode } from "../tool-view.ts";
 import type { BashOperations } from "../tools/bash.ts";
 import type { EditToolDetails } from "../tools/edit.ts";
 import type {
@@ -317,6 +319,12 @@ export interface ExtensionUIContext {
 
 	/** Set tool output expansion state. */
 	setToolsExpanded(expanded: boolean): void;
+
+	/** Get the global tool display mode. */
+	getToolViewMode(): ToolViewMode;
+
+	/** Set and persist the global tool display mode, resetting per-tool expansion overrides. */
+	setToolViewMode(mode: ToolViewMode): void;
 }
 
 // ============================================================================
@@ -485,6 +493,10 @@ export interface ToolRenderResultOptions {
 
 /** Context passed to tool renderers. */
 export interface ToolRenderContext<TState = any, TArgs = any> extends KeybindingHints {
+	/** Interactive renderer hosting this tool, when available. */
+	tui?: TUI;
+	/** Change this tool's inline expansion without affecting other tool rows. */
+	setExpanded?: (expanded: boolean) => void;
 	/** Current tool call arguments. Shared across call/result renders for the same tool call. */
 	args: TArgs;
 	/** Unique id for this tool execution. Stable across call/result renders for the same tool call. */
@@ -505,6 +517,8 @@ export interface ToolRenderContext<TState = any, TArgs = any> extends Keybinding
 	isPartial: boolean;
 	/** Whether the result view is expanded. */
 	expanded: boolean;
+	/** Effective display mode, including a per-tool expansion override. */
+	toolViewMode?: ToolViewMode;
 	/** Whether inline images are currently shown in the TUI. */
 	showImages: boolean;
 	/** Whether the current result is an error. */
@@ -1044,6 +1058,23 @@ export interface BoundaryResult {
 	continue?: boolean;
 }
 
+export type ContextBudgetEntryDraft = CustomEntryDraft | ContextEditEntryDraft;
+
+/** Fired when the host needs to reduce context before a request or overflow retry. */
+export interface ContextBudgetEvent {
+	type: "context_budget";
+	/** Tool-content byte budget. Omitted for a read-only query of recovery metadata. */
+	maxBytes?: number;
+	context: BoundaryContextPreview;
+}
+
+export interface ContextBudgetEventResult {
+	/** Appended after all handlers succeed and the projected context validates. */
+	entries?: ContextBudgetEntryDraft[];
+	/** References to retain if recovery must summarize the entire projected conversation. */
+	recoveryContext?: string;
+}
+
 /** Fired before final settlement. May append entries and ensure one next provider request. */
 export interface AgentBeforeSettleEvent extends BoundaryState {
 	type: "agent_before_settle";
@@ -1429,6 +1460,7 @@ export type ExtensionEvent =
 	| SessionEvent
 	| ContextEvent
 	| ContextWithSystemEvent
+	| ContextBudgetEvent
 	| CacheWarmingDecisionEvent
 	| BeforeProviderRequestEvent
 	| BeforeProviderHeadersEvent
@@ -1576,6 +1608,8 @@ export interface MarkdownTransformContext {
 	messageId?: string;
 	/** Persisted session-entry ISO timestamp. Undefined for live messages or live rendering; available when rendering from persisted session entries. */
 	timestamp?: string;
+	/** Model ID recorded on the assistant message, including historical replies. */
+	model?: string;
 }
 
 export type MarkdownTransformer = (markdown: string, context: MarkdownTransformContext) => string;
@@ -1590,6 +1624,32 @@ export interface MarkdownTransformerRegistration {
 	transformer: MarkdownTransformer;
 	messageTypes: ReadonlySet<MarkdownMessageType>;
 }
+
+export type ThinkingRenderComponent = Component & { dispose?(): void };
+
+export interface ThinkingRenderContext {
+	/** Effective display mode, including a per-block expansion override. */
+	mode: ThinkingViewMode;
+	isStreaming: boolean;
+	/** Whether this run is the current streaming tail. */
+	active: boolean;
+	hiddenLabel: string;
+	outputPad: number;
+	/** Original thinking Markdown, kept stable across streaming updates. */
+	markdown: Component;
+	lastComponent?: ThinkingRenderComponent;
+	tui?: TUI;
+	/** Expand or restore this thinking run without changing the global mode. */
+	setExpanded(expanded: boolean): void;
+	/** Invalidate this message's rendered lines and request a redraw. */
+	invalidate(): void;
+}
+
+export type ThinkingRenderer = (
+	thinking: string,
+	theme: Theme,
+	context: ThinkingRenderContext,
+) => ThinkingRenderComponent | undefined;
 
 export interface EntryRenderOptions extends KeybindingHints {
 	expanded: boolean;
@@ -1669,6 +1729,7 @@ export interface ExtensionAPI {
 	on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): () => void;
 	on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): () => void;
 	on(event: "context_with_system", handler: ExtensionHandler<ContextWithSystemEvent, ContextEventResult>): () => void;
+	on(event: "context_budget", handler: ExtensionHandler<ContextBudgetEvent, ContextBudgetEventResult>): () => void;
 	on(
 		event: "cache_warming_decision",
 		handler: ExtensionHandler<CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult>,
@@ -1764,6 +1825,9 @@ export interface ExtensionAPI {
 	 * assistant and thinking Markdown; `options.messageTypes` selects the surfaces instead.
 	 */
 	registerMarkdownTransformer(transformer: MarkdownTransformer, options?: MarkdownTransformerOptions): void;
+
+	/** Render thinking in the interactive transcript. The first registered renderer in extension load order wins. */
+	registerThinkingRenderer(renderer: ThinkingRenderer): void;
 
 	/** Register a custom renderer for CustomEntry. Custom entries do not participate in LLM context. */
 	registerEntryRenderer<T = unknown>(customType: string, renderer: EntryRenderer<T>): void;
@@ -2325,6 +2389,7 @@ export interface Extension {
 	messageRenderers: Map<string, MessageRenderer>;
 	toolRenderers?: ToolRendererResolver[];
 	markdownTransformer?: MarkdownTransformerRegistration;
+	thinkingRenderer?: ThinkingRenderer;
 	entryRenderers?: Map<string, EntryRenderer>;
 	commands: Map<string, RegisteredCommand>;
 	flags: Map<string, ExtensionFlag>;

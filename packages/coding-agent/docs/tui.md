@@ -147,6 +147,24 @@ Finish the interaction with the completion callback supplied to the component fa
 
 See [`overlay-qa-tests.ts`](../examples/extensions/overlay-qa-tests.ts) for positioning, stacking, focus, responsive visibility, and animation behavior.
 
+## Fullscreen timeline and pointer previews
+
+Use `isViewportTUI(tui)` before calling the optional fullscreen hooks. `setTimeline()` takes ordered preview/timestamp entries for the currently rendered turns, a tick-style callback, and a preview-component factory. `TRANSCRIPT_TURN_MARKER` is a zero-width rendering marker for the first line of each turn; Pi's user-message components emit it, and terminal renderers strip it. Keep marker order and metadata order aligned.
+
+The timeline reserves two transcript columns when at least two turns are available and the terminal is at least 60 columns wide. It highlights the turn containing the viewport top. Clicking a tick or chevron scrolls the existing viewport, including positioning a short final turn at the top; it does not change session state. Existing previous/next prompt bindings navigate turns while the timeline is enabled.
+
+Call `setMouseHoverEnabled(true)` for previews that need pointer motion, including inside multiplexers. `showHoverPreview(owner, component, event)` creates a non-capturing preview tied to a source region. It stays open while the pointer is over that source or the preview, and closes on keyboard input, scrolling, resize, focus loss or transcript replacement. A focused dialog takes precedence. `transcriptViewportHeight` lets preview components stay within the transcript and leave the input dock visible. Clear the timeline and hover settings on extension shutdown.
+
+Use `hideHoverPreview(owner)` when releasing one source component: it only closes that owner's active or pending preview. Calling it without an owner closes whichever preview is active.
+
+`setHoverPreviewDelay(milliseconds)` lets an extension choose the delay; the renderer defaults to zero. Repeated movement inside the same source keeps the original deadline. Leaving, typing, scrolling, resizing, opening a focused dialog or replacing the transcript cancels a pending preview. Changing the delay and stopping the renderer also cancel it. Reset the delay to zero on extension shutdown. These hooks belong to this fork; custom dialogs and overlays themselves use Pi's existing public APIs.
+
+The default [`builtin:tool-display`](../src/extensions/tool-display/) extension uses `registerToolRenderer()` to compose compact fullscreen tool titles and internal-call summaries and owns its scrollable `PreviewPanel`. It works independently of Grok and calls the original call/result renderers, preserving their shared state and component reuse, including final edit-diff reconciliation. Shell-chain splitting, script folding and compact edit/write titles belong to this extension; the built-in tool renderers retain upstream behavior when it is disabled. The fork adds `tui`, `toolViewMode` and `setExpanded()` to `ToolRenderContext` so a renderer can distinguish collapsed, summary and expanded views, request a host-managed hover preview and expand only its own tool. `ctx.ui.getToolViewMode()` and `setToolViewMode()` read or set the persisted global mode; global changes reset individual expansion overrides. Existing boolean tool-expansion APIs map `true` to expanded and `false` to summary. Output-only renderers, explicit `compactToolCall: false` components and native image output keep their existing display. Regular mode retains the original tool layout. Disable the presentation with `-builtin:tool-display` in extension settings; `-e builtin:tool-display` loads it explicitly when using `--no-extensions`.
+
+See the [Grok UI prototype](grok-ui-prototype.md) for this fork's extension setup and interaction checks.
+
+Thinking presentation uses [`registerThinkingRenderer()`](extensions.md#thinking-rendering). The default `builtin:thinking-steps` extension owns its summary parser, role styling, hover preview and clicks. The host supplies the original cached Markdown and generic expansion/invalidation callbacks. Stable `lastComponent` and Markdown identities retain stream caches and hover deadlines; unchanged messages keep the parent line cache while scrolling. No thinking-step algorithm runs in `pi-tui` or the native message component.
+
 ## Apply themes correctly
 
 Use the theme passed to the extension or component callback. Theme helpers produce ANSI-styled strings for semantic colors such as accent, muted text, success, warnings, errors, tool output, and Markdown.

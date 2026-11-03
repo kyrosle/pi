@@ -12,7 +12,13 @@ import {
 	type TerminalColorScheme,
 	type TerminalColors,
 } from "./terminal-colors.ts";
-import { getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.ts";
+import {
+	getCapabilities,
+	getKittyImageMetadata,
+	getKittyImagePlacementRows,
+	isImageLine,
+	setCellDimensions,
+} from "./terminal-image.ts";
 import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.ts";
 
 /**
@@ -200,6 +206,20 @@ export function isFocusable(component: Component | null): component is Component
  * TUI finds and strips this marker, then positions the hardware cursor there.
  */
 export const CURSOR_MARKER = "\x1b_pi:c\x07";
+
+/** Zero-width marker for a conversation turn; renderers strip it before terminal output. */
+export const TRANSCRIPT_TURN_MARKER = "\x1b_pi:turn\x07";
+
+export interface TranscriptTimelineEntry {
+	preview: string;
+	timestamp?: number;
+}
+
+export interface TranscriptTimelineOptions {
+	getEntries: () => readonly TranscriptTimelineEntry[];
+	styleTick: (text: string, active: boolean, hovered: boolean, enabled: boolean) => string;
+	renderPreview: (entry: TranscriptTimelineEntry) => Component;
+}
 
 /** Fake cursor markers - zero-width APC sequences around the text drawn as the cursor. See resolveFakeCursors(). */
 export const FAKE_CURSOR_START = "\x1b_pi:fc\x07";
@@ -436,7 +456,25 @@ export function compositeTuiLine(
 	overlayWidth: number,
 	totalWidth: number,
 ): string {
-	if (isImageLine(baseLine)) return baseLine;
+	let images = "";
+	if (isImageLine(baseLine)) {
+		const headers = [...baseLine.matchAll(/\x1b_G([^;]*);/g)];
+		if (
+			baseLine.includes("\x1b]1337;File=") ||
+			headers.length === 0 ||
+			headers.some(([, controls]) => !/^m=[01]$/.test(controls) && !/(?:^|,)C=1(?:,|$)/.test(controls))
+		)
+			return baseLine;
+		const original = baseLine;
+		// Keep image commands out of text slicing, including across stacked overlays.
+		baseLine = baseLine.replace(/(?:\x1b\[\d+G)?(?:\x1b_G[^\x1b]*\x1b\\)+/g, (sequence, offset: number) => {
+			images += sequence.startsWith("\x1b[")
+				? sequence
+				: `\x1b[${visibleWidth(original.slice(0, offset)) + 1}G${sequence}`;
+			return "";
+		});
+		if (!images || baseLine.includes("\x1b_G")) return original;
+	}
 
 	const afterStart = startCol + overlayWidth;
 	const base = extractSegments(baseLine, startCol, afterStart, totalWidth - afterStart, true);
@@ -457,7 +495,8 @@ export function compositeTuiLine(
 		base.after +
 		" ".repeat(afterPad);
 
-	return visibleWidth(result) <= totalWidth ? result : sliceByColumn(result, 0, totalWidth, true);
+	const text = visibleWidth(result) <= totalWidth ? result : sliceByColumn(result, 0, totalWidth, true);
+	return images ? `${images}\x1b[1G${text}` : text;
 }
 
 export type TuiMode = "regular" | "fullscreen";
@@ -503,6 +542,13 @@ export const VIEWPORT_TUI = Symbol.for("@earendil-works/pi-tui/viewport");
 export interface ViewportTUI extends TUI {
 	readonly [VIEWPORT_TUI]: true;
 	setLayoutRoot(component: Component | undefined): void;
+	readonly transcriptViewportHeight?: number;
+	setTimeline?(options: TranscriptTimelineOptions | undefined): void;
+	setMouseHoverEnabled?(enabled: boolean): void;
+	setHoverPreviewDelay?(delayMs: number): void;
+	showHoverPreview?(owner: object, component: Component, source: TuiMouseEvent): void;
+	/** Hide the current or pending preview, optionally only when its owner matches. */
+	hideHoverPreview?(owner?: object): void;
 }
 
 export function isViewportTUI(tui: TUI): tui is ViewportTUI {
@@ -1436,6 +1482,44 @@ export abstract class TuiBase extends Container implements TUI {
 
 		const viewportStart = Math.max(0, workingHeight - termHeight);
 
+		for (let index = 0; index < result.length; index++) {
+			const line = result[index];
+			if (!line.includes("\x1b_G")) continue;
+			result[index] = line.replace(
+				/(?:\x1b\[(\d+)G)?\x1b_G([^;]*);/g,
+				(header, column: string | undefined, controls: string, offset: number) => {
+					const metadata = getKittyImageMetadata(header);
+					const rows = getKittyImagePlacementRows(header);
+					if (!metadata || !rows) return header;
+					const prefix = line.slice(0, offset);
+					const position = [...prefix.matchAll(/\x1b\[(\d+)G/g)].at(-1);
+					const x = column
+						? Number(column) - 1
+						: position
+							? Number(position[1]) - 1 + visibleWidth(prefix.slice(position.index + position[0].length))
+							: visibleWidth(prefix);
+					const y = index - viewportStart;
+					if (
+						!rendered.some(
+							({ row, col, w, overlayLines }) =>
+								overlayLines.length > 0 &&
+								row < y + rows &&
+								row + overlayLines.length > y &&
+								col < x + metadata.columns &&
+								col + w > x,
+						)
+					)
+						return header;
+					// Kitty draws below non-default cell backgrounds at z < INT32_MIN / 2.
+					const lowered = controls
+						.split(",")
+						.filter((control) => !control.startsWith("z="))
+						.join(",");
+					return header.replace(/\x1b_G[^;]*;/, `\x1b_G${lowered},z=-1073741825;`);
+				},
+			);
+		}
+
 		// Composite each overlay
 		for (const { overlayLines, row, col, w } of rendered) {
 			for (let i = 0; i < overlayLines.length; i++) {
@@ -1509,8 +1593,9 @@ export abstract class TuiBase extends Container implements TUI {
 	 */
 	protected resolveFakeCursors(lines: string[]): string[] {
 		return lines.map((line) => {
-			if (!line.includes(FAKE_CURSOR_START)) return line;
-			const resolved = this.showHardwareCursor ? line.replace(FOCUSED_FAKE_CURSOR, "$1$2") : line;
+			const text = line.replaceAll(TRANSCRIPT_TURN_MARKER, "");
+			if (!text.includes(FAKE_CURSOR_START)) return text;
+			const resolved = this.showHardwareCursor ? text.replace(FOCUSED_FAKE_CURSOR, "$1$2") : text;
 			return resolved.replaceAll(FAKE_CURSOR_START, "\x1b[7m").replaceAll(FAKE_CURSOR_END, "\x1b[27m");
 		});
 	}

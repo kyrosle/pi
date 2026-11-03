@@ -171,6 +171,39 @@ describe("generateSummary reasoning options", () => {
 		expect(JSON.stringify(requestContext.messages)).toContain("Additional focus: keep migration decisions");
 	});
 
+	it("preserves custom instructions when the split-turn prefix is chunked", async () => {
+		// Regression test for #11058 with bounded summary splitting.
+		const checkpoint = "A concise chunk checkpoint.";
+		completeSimpleMock.mockResolvedValue({
+			...mockSummaryResponse,
+			content: [{ type: "text", text: checkpoint }],
+		});
+		const preparation: CompactionPreparation = {
+			firstKeptEntryId: "entry-keep",
+			messagesToSummarize: [],
+			turnPrefixMessages: [{ role: "user", content: "source facts ".repeat(10_000), timestamp: Date.now() }],
+			isSplitTurn: true,
+			tokensBefore: 100,
+			previousSummary: "previous checkpoint",
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
+		};
+
+		await compact(
+			preparation,
+			{ ...createModel(false, 1024), contextWindow: 16000 },
+			"test-key",
+			undefined,
+			"keep migration decisions",
+		);
+
+		expect(completeSimpleMock.mock.calls.length).toBeGreaterThan(2);
+		const requestContext = completeSimpleMock.mock.calls.at(-1)?.[1] as TranscriptContext;
+		const mergedPrompt = JSON.stringify(requestContext.messages);
+		expect(mergedPrompt).toContain(checkpoint);
+		expect(mergedPrompt).toContain("Additional focus: keep migration decisions");
+	});
+
 	it("rejects tool calls from conversation summaries", async () => {
 		completeSimpleMock.mockResolvedValueOnce(mockToolCallResponse);
 

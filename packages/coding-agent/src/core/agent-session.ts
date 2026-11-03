@@ -78,6 +78,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
+import { createFileOps, extractFileOpsFromMessage } from "./compaction/utils.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -417,6 +418,7 @@ export class AgentSession {
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
+	private _overflowBudgetScale = 1;
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -789,6 +791,64 @@ export class AgentSession {
 		);
 	}
 
+	private _contextInputBudget(model: Model<string>): number {
+		const reserve = this.settingsManager.getCompactionSettings(this.model).reserveTokens;
+		return Math.max(1, model.contextWindow - Math.min(reserve, Math.floor(model.contextWindow / 4)));
+	}
+
+	private async _applyContextBudget(model?: Model<string>): Promise<{ changed: boolean; recoveryContext?: string }> {
+		let maxBytes: number | undefined;
+		if (model) {
+			const budget = this._contextInputBudget(model);
+			const recent = this.settingsManager.getCompactionSettings(this.model).keepRecentTokens;
+			maxBytes = Math.floor(
+				Math.min(recent || budget / 4, budget / 2) *
+					(this._overflowRecoveryAttempted ? this._overflowBudgetScale : 4),
+			);
+		}
+		const result = await this._extensionRunner.emitContextBudget(maxBytes, (entries) =>
+			this._buildBoundaryContext(entries, "turn_end"),
+		);
+		const entries = result.entries ?? [];
+		if (entries.length) this._commitBoundaryDrafts(entries);
+		return { changed: entries.length > 0, recoveryContext: result.recoveryContext };
+	}
+
+	private async _prepareContextForModel(
+		model: Model<string>,
+		preparedProjection?: SessionProjection,
+	): Promise<boolean> {
+		if (model.contextWindow <= 0 || !this.settingsManager.getCompactionEnabled()) return false;
+		let projection = preparedProjection ?? this.sessionManager.buildSessionProjection();
+		if (
+			!projection.messages.some((message) => message.role === "toolResult") &&
+			(this._overflowBudgetScale === 1 || !(await this._applyContextBudget()).recoveryContext)
+		)
+			return false;
+		if (!this._exceedsCompactionThreshold(model, projection) && !this._overflowRecoveryAttempted) return false;
+		const leafBefore = this.sessionManager.getLeafId();
+		await this._runAutoCompaction("threshold", false);
+		this.agent.signal?.throwIfAborted();
+		projection = this.sessionManager.buildSessionProjection();
+		const fits = () =>
+			estimateMessagesTokens(projection.messages) <= this._contextInputBudget(model) &&
+			(this._overflowBudgetScale === 1 ||
+				projection.messages
+					.filter((message) => message.role === "toolResult")
+					.reduce((sum, message) => sum + Buffer.byteLength(JSON.stringify(message.content)), 0) <=
+					this._contextInputBudget(model) / 2);
+		if (!fits()) {
+			await this._runAutoCompaction("threshold", false, true);
+			this.agent.signal?.throwIfAborted();
+			projection = this.sessionManager.buildSessionProjection();
+		}
+		if (!fits())
+			throw new Error(
+				"Context still exceeds the model input budget after compaction; the system prompt or tool declarations may be too large.",
+			);
+		return leafBefore !== this.sessionManager.getLeafId();
+	}
+
 	private async _compactBeforeNextAssistantResponse(context: AgentContext): Promise<AgentContext> {
 		const projection = this.sessionManager.buildSessionProjection();
 		// A virtual selection is checked in prepareRequest, against the model the request is routed to.
@@ -796,7 +856,7 @@ export class AgentSession {
 		if (!model || isVirtualModel(model) || !this._exceedsCompactionThreshold(model, projection)) {
 			return { ...context, messages: projection.messages };
 		}
-		await this._runAutoCompaction("threshold", false);
+		if (!(await this._prepareContextForModel(model, projection))) await this._runAutoCompaction("threshold", false);
 		return { ...context, messages: this.sessionManager.buildSessionProjection().messages };
 	}
 
@@ -827,7 +887,10 @@ export class AgentSession {
 			let { previous, context, projection } = await prepare();
 			const model = previous?.model ?? this.agent.state.model;
 			const thinkingLevel = previous?.thinkingLevel ?? this.agent.state.thinkingLevel;
-			if (!isVirtualModel(model)) return { ...previous, context, model, thinkingLevel };
+			if (!isVirtualModel(model)) {
+				if (await this._prepareContextForModel(model, projection)) ({ previous, context } = await prepare());
+				return { ...previous, context, model, thinkingLevel };
+			}
 
 			// The selection stays in agent state; only this request uses the routed model. A routing
 			// failure rejects, which ends the run with an error response. Only messages the user wrote
@@ -851,7 +914,9 @@ export class AgentSession {
 			}
 			// The route stands: the router already decided this request. The state entry does not change
 			// the projection.
-			if (this._exceedsCompactionThreshold(route.model, projection)) {
+			if (await this._prepareContextForModel(route.model, projection)) {
+				({ previous, context } = await prepare());
+			} else if (this._exceedsCompactionThreshold(route.model, projection)) {
 				await this._runAutoCompaction("threshold", false);
 				({ previous, context } = await prepare());
 			}
@@ -1137,6 +1202,7 @@ export class AgentSession {
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempted = false;
+			this._overflowBudgetScale = 1;
 			const messageText = contentText(event.message.content, "");
 			if (messageText) {
 				// Check steering queue first
@@ -1188,6 +1254,7 @@ export class AgentSession {
 				this._lastAssistantMessage = assistantMsg;
 				if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
 					this._overflowRecoveryAttempted = false;
+					this._overflowBudgetScale = 1;
 				}
 
 				// Reset retry counter immediately on successful assistant response
@@ -3097,7 +3164,14 @@ export class AgentSession {
 				return await this._runAutoCompaction("overflow", false);
 			}
 
-			if (this._overflowRecoveryAttempted) {
+			if (
+				this._overflowRecoveryAttempted &&
+				!(
+					contextOverflow &&
+					this._overflowBudgetScale > 1 / 16 &&
+					(await this._applyContextBudget()).recoveryContext
+				)
+			) {
 				const errorMessage = contextOverflow
 					? "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model."
 					: "Truncated response recovery failed after one compact-and-retry attempt.";
@@ -3121,6 +3195,7 @@ export class AgentSession {
 
 			// Persistently omit the selected final attempt before post-run recovery compaction.
 			this._overflowRecoveryAttempted = true;
+			if (contextOverflow) this._overflowBudgetScale /= 4;
 			this._omitRecoveryAttempt(assistantMessage);
 			const retry = await this._runAutoCompaction("overflow", willRetry);
 			if (retry) this._failedResponse = assistantMessage;
@@ -3175,23 +3250,64 @@ export class AgentSession {
 	 * @param willRetry Whether to continue the interrupted turn after overflow compaction
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
-	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+	private async _runAutoCompaction(
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		compactEntireContext = false,
+	): Promise<boolean> {
 		const model = this.model;
 		const settings = this.settingsManager.getCompactionSettings(model);
 		let abortController: AbortController | undefined;
 		let started = false;
 		let fromExtension = false;
 		let cancelledByExtension = false;
+		const originalPreparation = prepareCompaction(this.sessionManager.getBranch(), settings);
+		const limitsModel = this._limitsModel();
+		// Budget-handler failures must stop the request before compaction can swallow the error and continue.
+		const budgetResult =
+			model && limitsModel && limitsModel.contextWindow > 0
+				? await this._applyContextBudget(limitsModel)
+				: { changed: false, recoveryContext: undefined };
 
 		try {
 			if (!model) {
 				return false;
 			}
 
-			const pathEntries = this.sessionManager.getBranch();
-			const preparation = prepareCompaction(pathEntries, settings);
+			if (this._isAgentRunActive && (this._agentRunAbortRequested || this.agent.signal?.aborted)) return false;
+			let pathEntries = this.sessionManager.getBranch();
+			let preparation = prepareCompaction(pathEntries, settings) ?? originalPreparation;
+			if (compactEntireContext) {
+				const projection = this.sessionManager.buildSessionProjection();
+				const boundaryId = budgetResult.recoveryContext
+					? this.sessionManager.appendCustomMessageEntry(
+							"context-budget-recovery",
+							budgetResult.recoveryContext,
+							false,
+						)
+					: this.sessionManager.appendCustomEntry("context-budget-boundary");
+				const boundary = this.sessionManager.getEntry(boundaryId);
+				if (boundary) this._emit({ type: "entry_appended", entry: boundary });
+				pathEntries = this.sessionManager.getBranch();
+				const fileOps = preparation?.fileOps ?? createFileOps();
+				for (const message of projection.messages) extractFileOpsFromMessage(message, fileOps);
+				preparation = {
+					firstKeptEntryId: boundaryId,
+					messagesToSummarize: projection.messages.filter((message) => message.role !== "system"),
+					turnPrefixMessages: [],
+					isSplitTurn: false,
+					tokensBefore: estimateMessagesTokens(projection.messages),
+					fileOps,
+					settings: {
+						...settings,
+						reserveTokens: limitsModel
+							? Math.min(settings.reserveTokens, Math.floor(this._contextInputBudget(limitsModel) / 8))
+							: settings.reserveTokens,
+					},
+				};
+			}
 			if (!preparation) {
-				return false;
+				return willRetry && budgetResult.changed;
 			}
 
 			abortController = new AbortController();

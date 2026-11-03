@@ -1,4 +1,12 @@
-import { Box, Container, Markdown, type MarkdownTheme, MouseRegion, Text } from "@earendil-works/pi-tui";
+import {
+	Box,
+	Container,
+	Markdown,
+	type MarkdownTheme,
+	MouseRegion,
+	Text,
+	TRANSCRIPT_TURN_MARKER,
+} from "@earendil-works/pi-tui";
 import type { ParsedSkillBlock } from "../../../core/agent-session.ts";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
@@ -38,6 +46,12 @@ export class SkillInvocationMessageComponent extends Box {
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
 		this.updateDisplay();
+	}
+
+	override render(width: number): string[] {
+		const lines = super.render(width);
+		if (this.skillBlock.userMessage || lines.length === 0) return lines;
+		return [TRANSCRIPT_TURN_MARKER + lines[0], ...lines.slice(1)];
 	}
 
 	setOutputPad(outputPad: number): void {

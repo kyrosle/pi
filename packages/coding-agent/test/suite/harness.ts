@@ -104,6 +104,8 @@ export function createTestUiContext(overrides: Partial<ExtensionUIContext> = {})
 		setTheme: () => ({ success: false, error: "Theme switching not available in tests" }),
 		getToolsExpanded: () => false,
 		setToolsExpanded: () => {},
+		getToolViewMode: () => "summary",
+		setToolViewMode: () => {},
 		...overrides,
 	};
 }

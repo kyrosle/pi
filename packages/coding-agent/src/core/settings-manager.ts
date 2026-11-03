@@ -25,6 +25,8 @@ import type {
 	TuiMode,
 	WarningSettings,
 } from "./settings-schema.ts";
+import { isThinkingViewMode, type ThinkingViewMode } from "./thinking-view.ts";
+import { isToolViewMode, type ToolViewMode } from "./tool-view.ts";
 
 export type {
 	BranchSummarySettings,
@@ -965,6 +967,32 @@ export class SettingsManager {
 
 	getHideThinkingBlock(): boolean {
 		return this.settings.hideThinkingBlock ?? SETTINGS_DEFAULTS.hideThinkingBlock;
+	}
+
+	getThinkingViewMode(): ThinkingViewMode {
+		const mode = this.settings.thinkingViewMode;
+		return isThinkingViewMode(mode)
+			? mode
+			: this.getHideThinkingBlock()
+				? "collapsed"
+				: SETTINGS_DEFAULTS.thinkingViewMode;
+	}
+
+	setThinkingViewMode(mode: ThinkingViewMode): void {
+		this.globalSettings.thinkingViewMode = mode;
+		this.markModified("thinkingViewMode");
+		this.save();
+	}
+
+	getToolViewMode(): ToolViewMode {
+		const mode = this.settings.toolViewMode;
+		return isToolViewMode(mode) ? mode : SETTINGS_DEFAULTS.toolViewMode;
+	}
+
+	setToolViewMode(mode: ToolViewMode): void {
+		this.globalSettings.toolViewMode = mode;
+		this.markModified("toolViewMode");
+		this.save();
 	}
 
 	getShowCacheMissNotices(): boolean {
