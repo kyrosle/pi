@@ -43,6 +43,7 @@
 - Fixed oversized tool results blocking context-overflow recovery: complete results remain in history and private text/JSON files while requests use bounded excerpts, preserve tool-call pairing, and are checked after compaction
 - Fixed oversized summary requests by splitting and merging transcripts and reducing chunk size after an input-size rejection
 - Fixed `/compact` custom instructions being dropped when a split-turn summary requires chunking and merging ([#11058](https://github.com/earendil-works/pi/issues/11058))
+- Fixed Grok UI replacing prompt editors supplied by other extensions. Pi now manages the default editor while Grok is active.
 
 ## [1.5.2] - 2026-11-10
 

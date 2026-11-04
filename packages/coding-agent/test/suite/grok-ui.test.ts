@@ -9,7 +9,6 @@ import {
 	getCapabilities,
 	setCapabilities,
 	setKeybindings,
-	stripTerminalSequences,
 	Text,
 	type TUI,
 	TuiAltScreen,
@@ -63,7 +62,7 @@ function createEditor(columns = 80) {
 	});
 }
 
-describe("Grok editor", () => {
+describe("Native editor", () => {
 	it.each([4, 12, 24, 80, 120])("fits Chinese, combining characters and emoji in %i columns", (width) => {
 		const editor = createEditor(width);
 		const emptyLines = editor.render(width);
@@ -138,30 +137,25 @@ describe("Grok editor", () => {
 });
 
 describe("Grok extension compatibility", () => {
-	it("installs the native editor with horizontal rules and embedded working status", async () => {
-		const harness = await createHarness({ extensionFactories: [grokUi] });
+	it("keeps the editor registered by another extension at startup", async () => {
+		const editorFactory = () => createEditor();
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_start", (_event, ctx) => ctx.ui.setEditorComponent(editorFactory));
+				},
+				grokUi,
+			],
+		});
 		harnesses.push(harness);
-		const tui = new TuiAltScreen(new VirtualTerminal());
 		const setEditorComponent = vi.fn<ReturnType<typeof createTestUiContext>["setEditorComponent"]>();
+		const setHeader = vi.fn();
 		await harness.session.bindExtensions({
 			mode: "tui",
-			uiContext: createTestUiContext({ setEditorComponent }),
+			uiContext: createTestUiContext({ setEditorComponent, setHeader }),
 		});
-		const editor = setEditorComponent.mock.lastCall?.[0]?.(tui, defaultEditorTheme, new KeybindingsManager());
-		expect(editor).toBeInstanceOf(CustomEditor);
-		if (!(editor instanceof CustomEditor)) throw new Error("Missing native editor");
-		editor.setText("draft");
-		const lines = editor.render(80).map(stripAnsi);
-		expect(lines[0]).toBe("─".repeat(80));
-		expect(lines.at(-1)).toBe("─".repeat(80));
-		expect(stripTerminalSequences(lines[1]).trim()).toBe("draft");
-		const working = new WorkingStatusIndicator(tui, "Working", { frames: ["*"] });
-		try {
-			editor.setWorkingStatusIndicator(working);
-			expect(stripAnsi(editor.render(80)[0])).toContain("Working");
-		} finally {
-			working.dispose();
-		}
+		expect(setEditorComponent.mock.calls).toEqual([[editorFactory]]);
+		expect(setHeader).toHaveBeenCalledOnce();
 	});
 
 	it("defaults hover to two seconds and applies persistent settings without changing model context", async () => {
