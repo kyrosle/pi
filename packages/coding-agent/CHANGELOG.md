@@ -42,6 +42,7 @@
 - Fixed oversized summary requests by splitting and merging transcripts and reducing chunk size after an input-size rejection
 - Fixed `/compact` custom instructions being dropped when a split-turn summary requires chunking and merging ([#11058](https://github.com/earendil-works/pi/issues/11058))
 - Fixed hover previews of very large custom tool results and their fallback output exceeding V8's argument limit
+- Fixed Grok UI replacing prompt editors supplied by other extensions. Pi now manages the default editor while Grok is active.
 
 ## [1.6.0] - 2026-11-20
 

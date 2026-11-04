@@ -10,7 +10,7 @@ A sticky view of the current turn's prompt is another useful candidate: it keeps
 
 Grok uses optional fullscreen timeline/hover hooks. The separate default `builtin:tool-display` extension wraps tool renderers for compact display. The presentation-layer changes supply viewport positioning, turn markers and preview lifecycle. Scrolling does not navigate the session tree, change the active conversation branch, alter context or rerun a tool.
 
-The UI uses extensions backed by small presentation changes in this fork. Editor framing, role headings, colors, the header, timeline, popup choices and hover settings live in `grok-ui.ts` and the theme. The default `builtin:tool-display` extension owns tool statuses, compact-call composition and pointer previews through `registerToolRenderer()`. The default `builtin:thinking-steps` extension owns thinking grouping, summaries, role styling and mouse handling through `registerThinkingRenderer()`. These independently loadable extensions use the shared `PreviewPanel`. Fullscreen transcript positions, turn markers and cancellable pointer previews remain in the TUI because the extension API does not expose those transcript details. Tool and thinking renderers receive narrow host callbacks for the active TUI and expanding one block. These extensions still depend on fork hooks; they are not standalone drop-ins for unmodified upstream Pi. Prefer public APIs and existing extensions before adding another host hook. Output archival belongs to a separate built-in extension; request-budget checks and automatic recovery remain in the agent core.
+The UI uses extensions backed by small presentation changes in this fork. Role headings, colors, the header, timeline, popup choices and hover settings live in `grok-ui.ts` and the theme. The default `builtin:tool-display` extension owns tool statuses, compact-call composition and pointer previews through `registerToolRenderer()`. The default `builtin:thinking-steps` extension owns thinking grouping, summaries, role styling and mouse handling through `registerThinkingRenderer()`. These independently loadable extensions use the shared `PreviewPanel`. Fullscreen transcript positions, turn markers and cancellable pointer previews remain in the TUI because the extension API does not expose those transcript details. Tool and thinking renderers receive narrow host callbacks for the active TUI and expanding one block. These extensions still depend on fork hooks; they are not standalone drop-ins for unmodified upstream Pi. Prefer public APIs and existing extensions before adding another host hook. Output archival belongs to a separate built-in extension; request-budget checks and automatic recovery remain in the agent core.
 
 The implementation follows Pi's [official tool-settings example](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/examples/extensions/tools.ts) and [overlay examples](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/examples/extensions/overlay-qa-tests.ts). [pi-extension-settings](https://github.com/juanibiapina/pi-extension-settings) provides shared extension-owned configuration; this prototype keeps its single setting in its own JSON file and adds no settings dependency.
 
@@ -27,7 +27,7 @@ To run the prototype with the tool presentation explicitly, from the repository 
   --theme .pi/themes/grok.json --use-theme grok --tui-mode fullscreen
 ```
 
-Add `-e builtin:thinking-steps` to include thinking summaries in this isolated launch. Normal launches load both built-in display extensions by default. `"extensions": ["-builtin:tool-display"]` disables the compact tool presentation while retaining Grok's editor, headings and timeline; `-e builtin:tool-display` also works without Grok.
+Add `-e builtin:thinking-steps` to include thinking summaries in this isolated launch. Normal launches load both built-in display extensions by default. `"extensions": ["-builtin:tool-display"]` disables the compact tool presentation while retaining Grok's header, headings and timeline; `-e builtin:tool-display` also works without Grok.
 
 The extensions also work with another Pi theme. `/settings` retains Pi's theme selector; `--tui-mode regular` retains terminal scrollback. Neither the extensions nor the project settings selects a model or changes active tools.
 
@@ -46,7 +46,7 @@ This is extension configuration, separate from Pi's core `settings.json`. Only i
 ## First-stage surfaces
 
 - **Fullscreen:** Pi's existing `TuiAltScreen` and `createChatViewport()` provide a scrolling transcript and fixed input dock, including mouse scrolling, selection, search, and resize handling.
-- **Input:** the native `CustomEditor` uses top and bottom horizontal rules, retaining autocomplete, paste, prompt history, configurable keys, hardware-cursor markers, mouse positioning and embedded working/retry/compaction indicators. Model and thinking level remain in the footer.
+- **Input:** Pi manages the input. Its default `CustomEditor` uses top and bottom horizontal rules, retaining autocomplete, paste, prompt history, configurable keys, hardware-cursor markers, mouse positioning and embedded working/retry/compaction indicators. Other extensions can supply an editor. Model and thinking level remain in the footer.
 - **Messages:** the Markdown transformer adds the current system username above user text and each reply's recorded model ID above assistant text, including streamed and historical replies. The host supplies that model ID in the read-only Markdown rendering context. Repeated Grok transformers keep one heading. Thinking keeps its own presentation. These headings appear only in rendered Markdown; stored messages, model requests and timeline previews retain the original text.
 - **Timeline:** when there are at least two rendered user turns and at least 60 terminal columns, a two-column rail shows one tick per turn. The bright thick tick identifies the viewport's current turn. Hover previews the stored user timestamp and prompt; click jumps to the turn, and ▲/▼ target the nearest turn above/below the viewport top. The original prompt-navigation keybindings now navigate turns in this view. A short last turn can align to the top without resuming automatic following.
 - **Tools:** `builtin:tool-display` uses `registerToolRenderer()` to wrap the call and result renderers returned by `next()`, add Queued/Running/Done/Failed status, and compose compact fullscreen display. Collapsed mode keeps one title line; summary mode lists all tool calls and supplied internal-call entries without a row limit, truncating long lines with `...` and keeping ordinary result output folded. Standard text components preserve original newlines without automatic wrapping. The status column reserves the longest label so completion does not change the excerpt. Summary formatting uses the native call components without executing commands or calling a model. Result renderers still run while collapsed so asynchronous edit previews reconcile with the final result. Hover shows the existing expanded call/result rendering in a bounded, independently scrollable panel. Clicking the row or panel expands inline; the original expansion shortcut still works. Previous components are unwrapped before delegation, result renderers/shared state remain intact, and self-framed tools keep their shell. Explicit compact opt-outs, output-only renderers and native image output retain their display.
@@ -57,7 +57,7 @@ This is extension configuration, separate from Pi's core `settings.json`. Only i
 
 The built-in footer remains in place so usage, cost, branch and other extensions' status text keep their existing behavior. Model selection, settings, session tree and extension dialogs retain Pi's current components; restyling all of them is outside this first prototype.
 
-Editor and header replacement follow Pi's existing extension load order; extensions sharing either slot need combination checks.
+Header replacement follows Pi's existing extension load order.
 
 Previews do not capture keyboard focus or cover the input dock. Leaving the source/panel, typing, scrolling the transcript, resizing, opening a focused dialog or replacing the session dismisses them. Tool details update while a preview is open. Grok resets its timeline and hover settings on shutdown/reload and reinstalls them when the renderer changes from regular to fullscreen. Timeline preview text is stripped of terminal control sequences before display.
 
@@ -69,7 +69,7 @@ src/cli.ts -> src/main.ts
      -> createInteractiveTui() -> TuiAltScreen / TuiMainScreen
      -> createChatViewport() -> ScrollView + fixed input dock
      -> extension UI context
-        -> setHeader() / setEditorComponent() / custom(overlay)
+        -> setHeader() / custom(overlay)
      -> ToolExecutionComponent
         -> ExtensionRunner.resolveToolRenderers() -> next()
         -> existing tool renderCall() / renderResult()

@@ -2,7 +2,6 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import {
-	CustomEditor,
 	type ExtensionAPI,
 	getAgentDir,
 	type KeybindingsManager,
@@ -241,10 +240,6 @@ export default function grokUi(pi: ExtensionAPI): void {
 				invalidate() {},
 			};
 		});
-		ctx.ui.setEditorComponent(
-			(tui, theme, keybindings) =>
-				new CustomEditor(tui, theme, keybindings, { paddingX: 1, embedWorkingStatus: true }),
-		);
 	});
 
 	pi.on("session_shutdown", () => {
